@@ -205,26 +205,38 @@ func (c *Client) postJSON(ctx context.Context, path, token string, payload any) 
 }
 
 func (c *Client) do(ctx context.Context, method, path, token string, payload any) ([]byte, http.Header, error) {
+	var body []byte
+	if payload != nil {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, nil, fmt.Errorf("编码请求失败: %w", err)
+		}
+		body = raw
+	}
+	return c.doRaw(ctx, method, path, token, "application/json", body)
+}
+
+// doRaw performs an HTTP request with an explicit content type and raw body.
+// body may be nil (no request body).
+func (c *Client) doRaw(ctx context.Context, method, path, token, contentType string, body []byte) ([]byte, http.Header, error) {
 	base := c.BaseURL
 	if base == "" {
 		base = DefaultBaseURL
 	}
 	url := strings.TrimRight(base, "/") + path
 
-	var body io.Reader
-	if payload != nil {
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			return nil, nil, fmt.Errorf("编码请求失败: %w", err)
-		}
-		body = bytes.NewReader(raw)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	req, err := http.NewRequestWithContext(ctx, method, url, reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("构建请求失败: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	req.Header.Set("Accept", "application/json, application/x-protobuf")
 	req.Header.Set("User-Agent", userAgent)
 	if token != "" {
