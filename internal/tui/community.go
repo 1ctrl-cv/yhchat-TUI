@@ -255,8 +255,101 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 		m.errText = ""
 		return m, nil
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+// handleMouse handles click and wheel events on the community page.
+func (m communityModel) handleMouse(msg tea.MouseMsg) (communityModel, tea.Cmd) {
+	x, y, ok := mouseBodyLocal(msg, m.width, m.height)
+	if !ok || m.width == 0 {
+		return m, nil
+	}
+	inner := m.innerWidth()
+	listW := m.listPanelWidth(inner)
+	listStart, detailStart := standardColumns(inner, listW)
+
+	if delta := wheelDelta(msg); delta != 0 {
+		if m.view == communityArticleView {
+			m.articleOffset += delta * 3
+			m.clampArticleOffset()
+			return m, nil
+		}
+		switch {
+		case x < listStart:
+			return m, nil
+		case x < detailStart:
+			if len(m.communities) > 0 {
+				m.listIndex = clamp(m.listIndex+delta, 0, len(m.communities)-1)
+				m.ensureListVisible()
+				return m, m.ensureCommunityCmd()
+			}
+		default:
+			if len(m.posts) > 0 {
+				m.postIndex = clamp(m.postIndex+delta, 0, len(m.posts)-1)
+				m.ensurePostsVisible()
+			}
+		}
+		return m, nil
+	}
+	if !isLeftClick(msg) {
+		return m, nil
+	}
+	if x < sidebarWidth {
+		if sec, hit := sectionAtRow(y); hit {
+			m.sidebarCursor = sec
+			if sec == sectionCommunity {
+				m.focus = communityList
+				return m, nil
+			}
+			return m, func() tea.Msg { return switchSectionMsg{to: sec} }
+		}
+		return m, nil
+	}
+	if m.view == communityArticleView {
+		if x >= listStart {
+			m.focus = communityArticle
+		}
+		return m, nil
+	}
+	if x < listStart {
+		return m, nil
+	}
+	if x < detailStart {
+		if y == 0 {
+			if index := m.tabAt(x-listStart, listW); index >= 0 && index != m.tab {
+				m.tab = index
+				m.loading = true
+				m.focus = communityTabs
+				return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab))
+			}
+			return m, nil
+		}
+		if y < 2 {
+			return m, nil
+		}
+		index := m.listOffset + (y-2)/2
+		if index >= 0 && index < len(m.communities) {
+			m.listIndex = index
+			m.focus = communityList
+			return m, m.ensureCommunityCmd()
+		}
+		return m, nil
+	}
+	// Article list of the selected community (starts after header rows).
+	if y >= 3 {
+		index := m.postOffset + (y-3)/2
+		if index >= 0 && index < len(m.posts) {
+			m.postIndex = index
+			m.focus = communityPosts
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, loadPostDetailCmd(m.client, m.token, m.posts[index].ID))
+		}
 	}
 	return m, nil
 }
@@ -631,25 +724,15 @@ func (m communityModel) View() string {
 func (m communityModel) listColumn(bodyH, width int) []string {
 	lines := make([]string, 0, bodyH)
 
-	// Tabs.
-	tabs := make([]string, 0, len(communityTabList))
-	for i, tab := range communityTabList {
-		style := tabInactiveStyle
-		if i == m.tab {
-			style = tabActiveStyle
-		}
-		tabs = append(tabs, style.Render(tab.Label))
+	// Tabs (compact style so they fit narrow list columns).
+	tabLine := m.tabsLine()
+	if m.focus == communityTabs {
+		tabLine = titleAccentStyle.Render("‹ ") + tabLine + titleAccentStyle.Render(" ›")
 	}
-	tabLine := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 	lines = append(lines, padLine(lipgloss.PlaceHorizontal(width, lipgloss.Center, tabLine), width))
 	lines = append(lines, separator(width))
 
 	height := maxInt(1, (bodyH-4)/2)
-	if m.focus == communityTabs {
-		lines[0] = padLine(lipgloss.PlaceHorizontal(width, lipgloss.Center,
-			lipgloss.JoinHorizontal(lipgloss.Top, titleAccentStyle.Render("‹ "), tabLine,
-				titleAccentStyle.Render(" ›"))), width)
-	}
 	offset := clamp(m.listOffset, 0, maxInt(0, len(m.communities)-1))
 	for i := 0; i < height; i++ {
 		index := offset + i
@@ -673,6 +756,42 @@ func (m communityModel) listColumn(bodyH, width int) []string {
 		lines = lines[:bodyH]
 	}
 	return lines
+}
+
+// tabsLine renders the compact tab bar.
+func (m communityModel) tabsLine() string {
+	var parts []string
+	for i, tab := range communityTabList {
+		if len(parts) > 0 {
+			parts = append(parts, " ")
+		}
+		style := tabInactiveCompactStyle
+		if i == m.tab {
+			style = tabActiveCompactStyle
+		}
+		parts = append(parts, style.Render(tab.Label))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+}
+
+// tabAt maps a list-column x coordinate to a tab index (-1 when outside).
+func (m communityModel) tabAt(relX, width int) int {
+	widths := make([]int, 0, len(communityTabList))
+	total := 0
+	for _, tab := range communityTabList {
+		w := lipgloss.Width(tabInactiveCompactStyle.Render(tab.Label))
+		widths = append(widths, w)
+		total += w
+	}
+	total += len(communityTabList) - 1
+	pos := (width - total) / 2
+	for i, w := range widths {
+		if relX >= pos && relX < pos+w {
+			return i
+		}
+		pos += w + 1
+	}
+	return -1
 }
 
 // renderCommunityRow renders one community as two lines.

@@ -110,6 +110,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a.route(msg)
 
+	case tea.MouseMsg:
+		return a.route(msg)
+
 	case autoLoginMsg:
 		return a.handleAutoLogin(msg)
 

@@ -334,6 +334,9 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
@@ -1081,6 +1084,80 @@ func (m mainWindowModel) conversationPageSize() int {
 // messagePageSize returns the message scroll page size.
 func (m mainWindowModel) messagePageSize() int {
 	return maxInt(1, m.messageViewportHeight()-1)
+}
+
+// handleMouse handles click and wheel events in the chat window.
+func (m mainWindowModel) handleMouse(msg tea.MouseMsg) (mainWindowModel, tea.Cmd) {
+	x, y, ok := mouseBodyLocal(msg, m.width, m.height)
+	if !ok || m.width == 0 {
+		return m, nil
+	}
+	inner := m.innerWidth()
+	convW := m.convPanelWidth(inner)
+	listStart := sidebarWidth + panelGap
+	chatStart := listStart + convW + panelGap
+
+	if delta := wheelDelta(msg); delta != 0 {
+		switch {
+		case x < listStart:
+			return m, nil
+		case x < chatStart:
+			m.moveSelection(delta * 2)
+			return m, m.ensureMessagesCmd()
+		default:
+			m.scrollMessages(delta * 3)
+			return m, nil
+		}
+	}
+	if !isLeftClick(msg) {
+		return m, nil
+	}
+
+	// Sidebar.
+	if x < sidebarWidth {
+		if sec, hit := sectionAtRow(y); hit {
+			m.sidebarCursor = sec
+			if sec == sectionChat {
+				m.setFocus(focusConversations)
+				return m, m.applyFocus()
+			}
+			return m, func() tea.Msg { return switchSectionMsg{to: sec} }
+		}
+		return m, nil
+	}
+	if x < listStart {
+		return m, nil
+	}
+
+	// Conversation column: search box (2 lines) then two-line rows.
+	if x < chatStart {
+		if y <= 1 {
+			m.setFocus(focusSearch)
+			return m, m.applyFocus()
+		}
+		row := y - 2
+		index := m.convOffset + row/2
+		if row >= 0 && index >= 0 && index < len(m.filtered) {
+			m.selected = index
+			m.ensureVisibleSelection()
+			m.setFocus(focusConversations)
+			return m, m.ensureMessagesCmd()
+		}
+		return m, nil
+	}
+
+	// Chat column: header, rule, message viewport, input box.
+	viewportTop := 2
+	inputTop := viewportTop + m.messageViewportHeight()
+	if y >= inputTop {
+		m.setFocus(focusInput)
+		return m, m.applyFocus()
+	}
+	if y >= viewportTop {
+		m.setFocus(focusMessages)
+		return m, m.applyFocus()
+	}
+	return m, nil
 }
 
 // ---------------------------------------------------------------------------

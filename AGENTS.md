@@ -68,6 +68,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 页面统一通过 `internal/tui/shell.go` 的 `renderSidebar` 渲染侧边栏，通过 `switchSectionMsg` 切换页面；新增页面需同时更新 App 的 screen/路由/View 与 `TestViewFitsTerminal`。
 - 实时消息统一由 `internal/api.WSClient` 产生 `WSEvent`，App 通过 `wsEventMsg` 转发给聊天模型；测试中必须设置 `app.wsEnabled=false`，禁止建立真实 WebSocket 连接（WS 层测试使用本地假 TCP 服务器）。
 - 时间格式必须使用 `timeNow` / `timeLocation`（`internal/tui/mainwindow.go`），测试会冻结时间保证快照确定性。
+- 鼠标：`main.go` 通过 `tea.WithMouseCellMotion()` 开启；各页面在 Update 中处理 `tea.MouseMsg`，用 `shell.go` 的 `mouseBodyLocal` / `standardColumns` / `isLeftClick` / `wheelDelta` 做命中测试；新增可点击区域要同步加 `mouse_test.go` 用例。登录页暂不支持鼠标。
 - 新增/修改 API 调用时：同步更新 `docs/API_NOTES.md`，并在 `internal/api/*_test.go` 加 protobuf fixture 测试。
 - 不要修改 `internal/api/proto.go` 中已验证的 UserInfo 解码语义（字段号/类型以 `../yhchatAPI/src/full.proto` 为准）。
 
@@ -97,6 +98,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 上游 API 文档：`../yhchatAPI/src/api/v1/*.md`、`../yhchatAPI/src/full.proto`、`../yhchatAPI/src/api/wss/`
 - 本项目 API 实测记录：[`docs/API_NOTES.md`](docs/API_NOTES.md)
 - 登录里程碑独立验收报告：[`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+
 
 
 

@@ -175,10 +175,80 @@ func (m contactsModel) Update(msg tea.Msg) (contactsModel, tea.Cmd) {
 		m.rebuildRows()
 		return m, nil
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+// handleMouse handles click and wheel events on the contacts page.
+func (m contactsModel) handleMouse(msg tea.MouseMsg) (contactsModel, tea.Cmd) {
+	x, y, ok := mouseBodyLocal(msg, m.width, m.height)
+	if !ok || m.width == 0 {
+		return m, nil
+	}
+	inner := m.innerWidth()
+	bodyH := m.bodyHeight()
+	listW := m.listPanelWidth(inner)
+	listStart, detailStart := standardColumns(inner, listW)
+
+	if delta := wheelDelta(msg); delta != 0 {
+		if x >= listStart && x < detailStart {
+			m.moveSelection(delta * 2)
+		}
+		return m, nil
+	}
+	if !isLeftClick(msg) {
+		return m, nil
+	}
+	if x < sidebarWidth {
+		if sec, hit := sectionAtRow(y); hit {
+			m.sidebarCursor = sec
+			if sec == sectionContacts {
+				m.focus = contactsList
+				return m, nil
+			}
+			return m, func() tea.Msg { return switchSectionMsg{to: sec} }
+		}
+		return m, nil
+	}
+	if x < listStart {
+		return m, nil
+	}
+	if x < detailStart {
+		// Header row (0) + separator (1), one line per row afterwards.
+		if y < 2 {
+			return m, nil
+		}
+		index := m.offset + (y - 2)
+		if index < 0 || index >= len(m.rows) {
+			return m, nil
+		}
+		m.selected = index
+		m.focus = contactsList
+		if m.rows[index].kind == contactRowHeader {
+			m.toggleRow()
+		}
+		return m, nil
+	}
+	// "Enter chat" button pinned to the bottom of the detail pane.
+	row := m.selectedRow()
+	if row == nil || row.kind != contactRowContact {
+		return m, nil
+	}
+	if y < bodyH-3 || y >= bodyH {
+		return m, nil
+	}
+	chatID := row.contact.ID
+	chatType := row.chatType
+	name := row.contact.DisplayName()
+	avatarURL := row.contact.AvatarURL
+	return m, func() tea.Msg {
+		return openContactChatMsg{chatID: chatID, chatType: chatType, name: name, avatarURL: avatarURL}
+	}
 }
 
 // handleLoadError handles a failed load (session expiry is forwarded).

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -109,4 +110,56 @@ func joinColumns(columns ...[]string) []string {
 		lines[row] = line
 	}
 	return lines
+}
+
+// ---------------------------------------------------------------------------
+// mouse helpers
+
+// mouseBodyLocal converts a mouse event to body-local coordinates for a
+// top-aligned full-screen page (body starts at row 2, column chromePadX).
+func mouseBodyLocal(msg tea.MouseMsg, width, height int) (x, y int, ok bool) {
+	w, h := screenSize(width, height)
+	padX := chromePadX
+	if w-2*padX < 8 {
+		padX = 1
+	}
+	x = msg.X - padX
+	y = msg.Y - 2
+	bodyH := maxInt(8, h-4)
+	if y < 0 || y >= bodyH || x < 0 {
+		return 0, 0, false
+	}
+	return x, y, true
+}
+
+// isLeftClick reports whether the event is a left-button press.
+func isLeftClick(msg tea.MouseMsg) bool {
+	return msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft
+}
+
+// wheelDelta returns -1 for wheel up, +1 for wheel down, 0 otherwise.
+func wheelDelta(msg tea.MouseMsg) int {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		return -1
+	case tea.MouseButtonWheelDown:
+		return 1
+	}
+	return 0
+}
+
+// sectionAtRow maps a body row to a sidebar section (rows 0..sectionCount-1).
+func sectionAtRow(y int) (section, bool) {
+	if y < 0 || y >= sectionCount {
+		return 0, false
+	}
+	return section(y), true
+}
+
+// standardColumns returns body-local start offsets of the list and detail
+// columns of the three-column layout.
+func standardColumns(inner, listW int) (listStart, detailStart int) {
+	listStart = sidebarWidth + panelGap
+	detailStart = listStart + listW + panelGap
+	return listStart, detailStart
 }

@@ -53,6 +53,18 @@ var (
 				Foreground(colorMuted).
 				Padding(0, 2)
 
+	// Compact button styles used inside the centered add-friend dialog.
+	dialogCancelStyle  = lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 1)
+	dialogPrimaryStyle = lipgloss.NewStyle().Bold(true).Foreground(colorOnAccent).Background(colorAccent).Padding(0, 1)
+
+	// Compact tabs for narrow columns (community list / add-friend dialog).
+	tabActiveCompactStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorOnAccent).
+				Background(colorAccent)
+	tabInactiveCompactStyle = lipgloss.NewStyle().
+				Foreground(colorMuted)
+
 	buttonStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).

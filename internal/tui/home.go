@@ -222,6 +222,9 @@ func (m homeModel) Update(msg tea.Msg) (homeModel, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
@@ -916,6 +919,131 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 	return out
 }
 
+// handleMouse handles click and wheel events on the profile page.
+func (m homeModel) handleMouse(msg tea.MouseMsg) (homeModel, tea.Cmd) {
+	x, y, ok := mouseBodyLocal(msg, m.width, m.height)
+	if !ok || m.width == 0 {
+		return m, nil
+	}
+	inner := m.innerWidth()
+	bodyH := m.bodyHeight()
+	menuW := m.menuPanelWidth(inner)
+	menuStart := sidebarWidth + panelGap
+	detailStart := menuStart + menuW + panelGap
+
+	if delta := wheelDelta(msg); delta != 0 {
+		if x >= menuStart && x < detailStart {
+			m.menuIndex = clamp(m.menuIndex+delta*2, 0, len(profileMenuItems)-1)
+			m.ensureMenuVisible()
+		}
+		return m, nil
+	}
+	if !isLeftClick(msg) {
+		return m, nil
+	}
+	if x < sidebarWidth {
+		if sec, hit := sectionAtRow(y); hit {
+			m.sidebarCursor = sec
+			if sec == sectionProfile {
+				m.focus = profileMenu
+				return m, nil
+			}
+			return m, func() tea.Msg { return switchSectionMsg{to: sec} }
+		}
+		return m, nil
+	}
+	if x < menuStart {
+		return m, nil
+	}
+	if x < detailStart {
+		// Profile card occupies rows 0..3, then a separator; menu starts at 5.
+		if y < 5 {
+			return m, nil
+		}
+		index := m.menuOffset + (y - 5)
+		if index >= 0 && index < len(profileMenuItems) {
+			m.menuIndex = index
+			m.ensureMenuVisible()
+			m.focus = profileMenu
+			return m.openDetail()
+		}
+		return m, nil
+	}
+	if m.detail == detailFormAddFriend && len(m.fields) >= 2 {
+		return m.handleAddFriendMouse(x-detailStart, y, bodyH, inner-detailStart)
+	}
+	return m, nil
+}
+
+// handleAddFriendMouse handles clicks inside the centered add-friend dialog.
+func (m homeModel) handleAddFriendMouse(dx, dy, bodyH, width int) (homeModel, tea.Cmd) {
+	boxTop, boxLeft, interior, contentTop := m.addFriendDialogGeometry(bodyH, width)
+	interiorStart := boxLeft + 3 // border (1) + horizontal padding (2)
+	_ = boxTop
+
+	if dy == contentTop+3 {
+		widths := make([]int, 0, 3)
+		total := 0
+		for _, label := range []string{"好友", "群聊", "机器人"} {
+			w := lipgloss.Width(tabInactiveCompactStyle.Render(label))
+			widths = append(widths, w)
+			total += w
+		}
+		total += len(widths) - 1
+		pos := interiorStart + (interior-total)/2
+		for i, w := range widths {
+			if dx >= pos && dx < pos+w {
+				m.setAddFriendType(i)
+				m.addFriendTabsFocus = true
+				m.focus = profileDetail
+				return m, m.applyFieldFocus()
+			}
+			pos += w + 1
+		}
+		return m, nil
+	}
+	switch dy - contentTop {
+	case 6: // user/group/bot ID input
+		m.addFriendTabsFocus = false
+		m.fieldFocus = 0
+		m.focus = profileDetail
+		return m, m.applyFieldFocus()
+	case 9: // verification message input
+		m.addFriendTabsFocus = false
+		m.fieldFocus = 1
+		m.focus = profileDetail
+		return m, m.applyFieldFocus()
+	case 11: // buttons
+		cancelW := lipgloss.Width(dialogCancelStyle.Render("取消"))
+		primaryW := lipgloss.Width(dialogPrimaryStyle.Render("发送申请"))
+		total := cancelW + 2 + primaryW
+		pos := interiorStart + (interior-total)/2
+		if dx >= pos && dx < pos+cancelW {
+			m.fields = nil
+			m.detail = detailEmpty
+			m.focus = profileMenu
+			m.addFriendTabsFocus = false
+			return m, nil
+		}
+		if dx >= pos+cancelW+2 && dx < pos+total {
+			return m.submitForm()
+		}
+	}
+	return m, nil
+}
+
+// addFriendDialogGeometry returns the layout of the centered dialog.
+func (m homeModel) addFriendDialogGeometry(bodyH, width int) (boxTop, boxLeft, interior, contentTop int) {
+	boxWidth := clamp(width-4, 30, 58)
+	interior = maxInt(18, boxWidth-6)
+	contentLines := 12
+	boxHeight := contentLines + 2
+	boxTop = maxInt(0, (bodyH-boxHeight)/2)
+	boxLeft = maxInt(0, (width-boxWidth)/2)
+	contentTop = boxTop + 1
+	return boxTop, boxLeft, interior, contentTop
+}
+
 // addFriendDialog renders the centered add-friend dialog.
 func (m homeModel) addFriendDialog(bodyH, width int) []string {
 	boxWidth := clamp(width-4, 30, 58)
@@ -929,9 +1057,9 @@ func (m homeModel) addFriendDialog(bodyH, width int) []string {
 	typeLabels := []string{"好友", "群聊", "机器人"}
 	var tabParts []string
 	for i, label := range typeLabels {
-		style := tabInactiveStyle
+		style := tabInactiveCompactStyle
 		if i == m.addFriendType {
-			style = tabActiveStyle
+			style = tabActiveCompactStyle
 		}
 		if len(tabParts) > 0 {
 			tabParts = append(tabParts, " ")
@@ -973,13 +1101,8 @@ func (m homeModel) addFriendDialog(bodyH, width int) []string {
 	content = append(content, renderField(1, verifyLabel)...)
 	content = append(content, "")
 
-	cancel := lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 1).Render("取消")
-	primary := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(colorOnAccent).
-		Background(colorAccent).
-		Padding(0, 1).
-		Render("发送申请")
+	cancel := dialogCancelStyle.Render("取消")
+	primary := dialogPrimaryStyle.Render("发送申请")
 	content = append(content, lipgloss.PlaceHorizontal(interior, lipgloss.Center,
 		lipgloss.JoinHorizontal(lipgloss.Top, cancel, "  ", primary)))
 	if m.loading {

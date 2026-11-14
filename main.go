@@ -62,7 +62,7 @@ func main() {
 		client.BaseURL = server
 	}
 
-	program := tea.NewProgram(tui.New(client, store), tea.WithAltScreen())
+	program := tea.NewProgram(tui.New(client, store), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, runErr := program.Run(); runErr != nil {
 		fmt.Fprintf(os.Stderr, "程序运行失败: %v\n", runErr)
 		os.Exit(1)
