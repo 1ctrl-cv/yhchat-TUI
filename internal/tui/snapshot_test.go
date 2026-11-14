@@ -118,6 +118,19 @@ func TestViewSnapshots(t *testing.T) {
 	applyAll(t, app, cmd)
 	snap.check("profile_about", app.View())
 
+	// Personal profile page and its edit dialog.
+	sendKey(t, app, tea.KeyEsc)
+	sendKeyRunes(t, app, 'g') // jump the menu cursor back to the top
+	for app.home.menuIndex < len(profileMenuItems)-1 && profileMenuItems[app.home.menuIndex].Label != "个人资料" {
+		sendKey(t, app, tea.KeyDown)
+	}
+	cmd = sendKey(t, app, tea.KeyEnter)
+	app.Update(waitFor[profileUserDataMsg](t, cmd))
+	snap.check("profile_userdata", app.View())
+	cmd = sendKey(t, app, tea.KeyEnter)
+	applyAll(t, app, cmd)
+	snap.check("profile_useredit", app.View())
+
 	// Startup splash while validating a stored token.
 	store := &config.Store{
 		Path: t.TempDir() + "/config.json",

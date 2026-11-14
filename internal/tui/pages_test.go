@@ -375,3 +375,68 @@ func TestAddFriendDialogLayout(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileUserDataEdit(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	openHomeScreen(t, app)
+
+	// Open 个人资料 (3rd item) and wait for the data to load.
+	for app.home.menuIndex < 2 {
+		sendKey(t, app, tea.KeyDown)
+	}
+	cmd := sendKey(t, app, tea.KeyEnter)
+	app.Update(waitFor[profileUserDataMsg](t, cmd))
+	if app.home.detail != detailUserData {
+		t.Fatalf("detail = %v, want user data", app.home.detail)
+	}
+	if !strings.Contains(app.View(), "修改") {
+		t.Fatalf("个人资料 page missing the 修改 button\n%s", app.View())
+	}
+
+	// Enter opens the edit dialog.
+	cmd = sendKey(t, app, tea.KeyEnter)
+	applyAll(t, app, cmd)
+	if app.home.detail != detailFormUserData {
+		t.Fatalf("detail = %v, want edit form", app.home.detail)
+	}
+	view := app.View()
+	for _, want := range []string{"修改资料", "个人简介", "所在地", "地区码", "保存", "取消"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("edit dialog missing %q\n%s", want, view)
+		}
+	}
+
+	// Fill the form and save.
+	app.home.fields[0].SetValue("新的个人简介")
+	app.home.fields[1].SetValue("上海市 上海城区 黄浦区")
+	app.home.fields[2].SetValue("310101")
+	app.home.setUserDataGender(2)
+	cmd = sendKey(t, app, tea.KeyEnter)
+	done := waitFor[profileActionDoneMsg](t, cmd)
+	_, reload := app.Update(done)
+	app.Update(waitFor[profileUserDataMsg](t, reload))
+
+	if ts.userData == nil {
+		t.Fatal("save-user-data was not called")
+	}
+	if got := ts.userData["introduction"]; got != "新的个人简介" {
+		t.Fatalf("introduction = %v", got)
+	}
+	if got := ts.userData["gender"]; got != float64(2) {
+		t.Fatalf("gender = %v", got)
+	}
+	if got := ts.userData["province"]; got != "上海市" {
+		t.Fatalf("province = %v", got)
+	}
+	if got := ts.userData["locationCode"]; got != "310101" {
+		t.Fatalf("locationCode = %v", got)
+	}
+	view = app.View()
+	for _, want := range []string{"新的个人简介", "上海市", "310101"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("saved profile missing %q\n%s", want, view)
+		}
+	}
+}

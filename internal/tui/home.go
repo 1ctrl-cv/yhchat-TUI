@@ -31,6 +31,7 @@ const (
 	detailFormAvatar
 	detailFormAddFriend
 	detailUserData
+	detailFormUserData
 	detailLogoutConfirm
 	detailSettings
 	detailAbout
@@ -99,6 +100,10 @@ type homeModel struct {
 	addFriendType      int  // 0 user, 1 group, 2 bot
 	addFriendTabsFocus bool // focus is on the type tabs
 
+	// personal-profile edit state
+	userDataGender    int  // 1 male, 2 female, 3 other
+	userDataTabsFocus bool // focus is on the gender tabs
+
 	userData *api.UserData
 
 	configPathText string
@@ -155,6 +160,19 @@ func loadUserDataCmd(client *api.Client, token string) tea.Cmd {
 		defer cancel()
 		data, err := client.UserData(ctx, token)
 		return profileUserDataMsg{data: data, err: err}
+	}
+}
+
+// saveUserDataCmd persists the editable parts of the personal profile.
+func saveUserDataCmd(client *api.Client, token string, data api.UserData) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return profileActionDoneMsg{
+			kind:    detailFormUserData,
+			err:     client.SaveUserData(ctx, token, data),
+			success: "个人资料已更新",
+		}
 	}
 }
 
@@ -265,6 +283,14 @@ func (m homeModel) Update(msg tea.Msg) (homeModel, tea.Cmd) {
 		}
 		m.errText = ""
 		m.okText = msg.success
+		if msg.kind == detailFormUserData {
+			// Stay on the profile page and reload the saved values.
+			m.detail = detailUserData
+			m.fields = nil
+			m.userDataTabsFocus = false
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, loadUserDataCmd(m.client, m.token))
+		}
 		m.detail = detailEmpty
 		m.fields = nil
 		m.focus = profileMenu
@@ -404,9 +430,33 @@ func (m homeModel) handleDetailKey(key string, msg tea.KeyMsg) (homeModel, tea.C
 			}
 			return m, nil
 		}
+		if m.detail == detailFormUserData && m.userDataTabsFocus {
+			switch key {
+			case "left", "up":
+				m.setUserDataGender(m.userDataGender - 1)
+			case "right", "down":
+				m.setUserDataGender(m.userDataGender + 1)
+			case "enter":
+				m.userDataTabsFocus = false
+				m.fieldFocus = 0
+				return m, m.applyFieldFocus()
+			case "esc":
+				m.fields = nil
+				m.detail = detailUserData
+				m.userDataTabsFocus = false
+				m.focus = profileDetail
+			}
+			return m, nil
+		}
 		switch key {
 		case "esc":
 			m.fields = nil
+			m.userDataTabsFocus = false
+			if m.detail == detailFormUserData {
+				m.detail = detailUserData
+				m.focus = profileDetail
+				return m, nil
+			}
 			m.detail = detailEmpty
 			m.focus = profileMenu
 			m.addFriendTabsFocus = false
@@ -441,6 +491,9 @@ func (m homeModel) handleDetailKey(key string, msg tea.KeyMsg) (homeModel, tea.C
 	case "enter":
 		if m.detail == detailLogoutConfirm {
 			return m, logoutCmd(m.client, m.token)
+		}
+		if m.detail == detailUserData {
+			return m.openUserDataEdit()
 		}
 	case "l":
 		if m.detail == detailLogoutConfirm {
@@ -543,7 +596,7 @@ func (m homeModel) currentFieldIndex() int {
 func (m *homeModel) applyFieldFocus() tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(m.fields))
 	for i := range m.fields {
-		if !m.addFriendTabsFocus && i == m.fieldFocus {
+		if !m.addFriendTabsFocus && !m.userDataTabsFocus && i == m.fieldFocus {
 			cmds = append(cmds, m.fields[i].Focus())
 		} else {
 			m.fields[i].Blur()
@@ -560,6 +613,20 @@ func (m homeModel) cycleFormFocus(delta int) (homeModel, tea.Cmd) {
 		}
 		n := len(m.fields)
 		m.fieldFocus = ((m.fieldFocus+delta)%n + n) % n
+		return m, m.applyFieldFocus()
+	}
+	if m.detail == detailFormUserData {
+		// Gender tabs + three inputs: 0 = tabs, 1..3 = fields.
+		slot := 1 + m.fieldFocus
+		if m.userDataTabsFocus {
+			slot = 0
+		}
+		slot = ((slot+delta)%4 + 4) % 4
+		m.userDataTabsFocus = slot == 0
+		m.fieldFocus = 0
+		if slot > 0 {
+			m.fieldFocus = slot - 1
+		}
 		return m, m.applyFieldFocus()
 	}
 	// Add-friend dialog slots: 0 = type tabs, 1 = ID, 2 = verification message.
@@ -589,6 +656,36 @@ func (m *homeModel) setAddFriendIDPlaceholder() {
 	}
 	placeholders := []string{"user id", "group id", "bot id"}
 	m.fields[0].Placeholder = placeholders[clamp(m.addFriendType, 0, len(placeholders)-1)]
+}
+
+// openUserDataEdit opens the edit form prefilled with the current profile.
+func (m homeModel) openUserDataEdit() (homeModel, tea.Cmd) {
+	if m.userData == nil {
+		m.loading = true
+		return m, tea.Batch(m.spinner.Tick, loadUserDataCmd(m.client, m.token))
+	}
+	m.detail = detailFormUserData
+	m.errText = ""
+	m.okText = ""
+	m.userDataTabsFocus = false
+	m.userDataGender = int(m.userData.Gender)
+	if m.userDataGender < 1 || m.userDataGender > 3 {
+		m.userDataGender = 1
+	}
+	location := strings.Join(strings.Fields(m.userData.Province+" "+m.userData.City+" "+m.userData.District), " ")
+	m.initFields([]fieldSpec{
+		{Value: m.userData.Introduction},
+		{Value: location},
+		{Value: m.userData.LocationCode},
+	})
+	m.fieldFocus = 0
+	m.focus = profileDetail
+	return m, m.applyFieldFocus()
+}
+
+// setUserDataGender switches the gender selector (1 male, 2 female, 3 other).
+func (m *homeModel) setUserDataGender(value int) {
+	m.userDataGender = clamp(value, 1, 3)
 }
 
 // submitForm validates and submits the current form.
@@ -626,6 +723,33 @@ func (m homeModel) submitForm() (homeModel, tea.Cmd) {
 		chatType := []api.ChatType{api.ChatTypeUser, api.ChatTypeGroup, api.ChatTypeBot}[clamp(m.addFriendType, 0, 2)]
 		m.loading = true
 		return m, tea.Batch(m.spinner.Tick, addFriendCmd(m.client, m.token, chatID, chatType, verifyMessage))
+	case detailFormUserData:
+		introduction := strings.TrimSpace(m.fields[0].Value())
+		locationParts := strings.Fields(m.fields[1].Value())
+		province, city, district := "", "", ""
+		if len(locationParts) > 0 {
+			province = locationParts[0]
+		}
+		if len(locationParts) > 1 {
+			city = locationParts[1]
+		}
+		if len(locationParts) > 2 {
+			district = locationParts[2]
+		}
+		data := api.UserData{
+			Introduction:      introduction,
+			Gender:            int32(clamp(m.userDataGender, 1, 3)),
+			Province:          province,
+			City:              city,
+			District:          district,
+			LocationCode:      strings.TrimSpace(m.fields[2].Value()),
+			BirthdayTimestamp: 0,
+		}
+		if m.userData != nil {
+			data.BirthdayTimestamp = m.userData.BirthdayTimestamp
+		}
+		m.loading = true
+		return m, tea.Batch(m.spinner.Tick, saveUserDataCmd(m.client, m.token, data))
 	}
 	return m, nil
 }
@@ -797,6 +921,7 @@ func (m homeModel) statusLine(width int) string {
 // detailColumn renders the right-hand detail pane.
 func (m homeModel) detailColumn(bodyH, width int) []string {
 	lines := []string{}
+	bottomButton := ""
 	switch m.detail {
 	case detailEmpty:
 		lines = append(lines, "", hintStyle.Render("从左侧选择一项操作"), "")
@@ -848,6 +973,9 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 		for _, row := range rows {
 			lines = append(lines, m.detailRow(width, row[0], row[1]))
 		}
+		bottomButton = lipgloss.PlaceHorizontal(width, lipgloss.Center, dialogPrimaryStyle.Render("修改"))
+	case detailFormUserData:
+		return m.userDataDialog(bodyH, width)
 	case detailFormAddFriend:
 		return m.addFriendDialog(bodyH, width)
 	case detailFormNickname, detailFormAvatar:
@@ -901,6 +1029,13 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 		lines = append(lines, titleAccentStyle.Render(truncate(m.placeholderTitle(), maxInt(8, width-2))), "")
 		lines = append(lines, hintStyle.Render(" 该功能将在后续版本实现。"))
 		lines = append(lines, hintStyle.Render(truncate(" 当前已支持：登录、聊天、通讯录、社区浏览、个人资料/昵称/头像修改。", maxInt(8, width-2))))
+	}
+
+	if bottomButton != "" {
+		contentH := maxInt(1, bodyH-1)
+		out := padLines(lines, contentH, width)
+		out = append(out, padLine(bottomButton, width))
+		return out
 	}
 
 	// Pad/trim to bodyH.
@@ -972,6 +1107,73 @@ func (m homeModel) handleMouse(msg tea.MouseMsg) (homeModel, tea.Cmd) {
 	if m.detail == detailFormAddFriend && len(m.fields) >= 2 {
 		return m.handleAddFriendMouse(x-detailStart, y, bodyH, inner-detailStart)
 	}
+	if m.detail == detailFormUserData && len(m.fields) >= 3 {
+		return m.handleUserDataMouse(x-detailStart, y, bodyH, inner-detailStart)
+	}
+	if m.detail == detailUserData && y == bodyH-1 {
+		return m.openUserDataEdit()
+	}
+	return m, nil
+}
+
+// handleUserDataMouse handles clicks inside the profile edit dialog.
+func (m homeModel) handleUserDataMouse(dx, dy, bodyH, width int) (homeModel, tea.Cmd) {
+	_, boxLeft, interior, contentTop := m.userDataDialogGeometry(bodyH, width)
+	interiorStart := boxLeft + 3 // border (1) + horizontal padding (2)
+
+	if dy == contentTop+1 { // gender tabs
+		widths := make([]int, 0, 3)
+		total := 0
+		for _, label := range []string{"男", "女", "其他"} {
+			w := lipgloss.Width(tabInactiveCompactStyle.Render(label))
+			widths = append(widths, w)
+			total += w
+		}
+		total += len(widths) - 1
+		pos := interiorStart + (interior-total)/2
+		for i, w := range widths {
+			if dx >= pos && dx < pos+w {
+				m.setUserDataGender(i + 1)
+				m.userDataTabsFocus = true
+				m.focus = profileDetail
+				return m, m.applyFieldFocus()
+			}
+			pos += w + 1
+		}
+		return m, nil
+	}
+	switch dy - contentTop {
+	case 3: // introduction
+		m.userDataTabsFocus = false
+		m.fieldFocus = 0
+		m.focus = profileDetail
+		return m, m.applyFieldFocus()
+	case 5: // location
+		m.userDataTabsFocus = false
+		m.fieldFocus = 1
+		m.focus = profileDetail
+		return m, m.applyFieldFocus()
+	case 7: // location code
+		m.userDataTabsFocus = false
+		m.fieldFocus = 2
+		m.focus = profileDetail
+		return m, m.applyFieldFocus()
+	case 8: // buttons
+		cancelW := lipgloss.Width(dialogCancelStyle.Render("取消"))
+		saveW := lipgloss.Width(dialogPrimaryStyle.Render("保存"))
+		total := cancelW + 2 + saveW
+		pos := interiorStart + (interior-total)/2
+		if dx >= pos && dx < pos+cancelW {
+			m.fields = nil
+			m.detail = detailUserData
+			m.userDataTabsFocus = false
+			m.focus = profileDetail
+			return m, nil
+		}
+		if dx >= pos+cancelW+2 && dx < pos+total {
+			return m.submitForm()
+		}
+	}
 	return m, nil
 }
 
@@ -1042,6 +1244,97 @@ func (m homeModel) addFriendDialogGeometry(bodyH, width int) (boxTop, boxLeft, i
 	boxLeft = maxInt(0, (width-boxWidth)/2)
 	contentTop = boxTop + 1
 	return boxTop, boxLeft, interior, contentTop
+}
+
+// userDataDialogGeometry returns the layout of the profile edit dialog.
+func (m homeModel) userDataDialogGeometry(bodyH, width int) (boxTop, boxLeft, interior, contentTop int) {
+	boxWidth := clamp(width-4, 34, 58)
+	interior = maxInt(20, boxWidth-6)
+	boxHeight := 9 + 2
+	boxTop = maxInt(0, (bodyH-boxHeight)/2)
+	boxLeft = maxInt(0, (width-boxWidth)/2)
+	contentTop = boxTop + 1
+	return boxTop, boxLeft, interior, contentTop
+}
+
+// userDataDialog renders the centered personal-profile edit dialog.
+func (m homeModel) userDataDialog(bodyH, width int) []string {
+	boxWidth := clamp(width-4, 34, 58)
+	interior := maxInt(20, boxWidth-6)
+
+	title := lipgloss.PlaceHorizontal(interior, lipgloss.Center,
+		titleAccentStyle.Render("修改资料"))
+
+	genderLabels := []string{"男", "女", "其他"}
+	var tabParts []string
+	for i, label := range genderLabels {
+		if len(tabParts) > 0 {
+			tabParts = append(tabParts, " ")
+		}
+		style := tabInactiveCompactStyle
+		if i == m.userDataGender-1 {
+			style = tabActiveCompactStyle
+		}
+		tabParts = append(tabParts, style.Render(label))
+	}
+	tabsLine := lipgloss.JoinHorizontal(lipgloss.Top, tabParts...)
+	if m.userDataTabsFocus {
+		tabsLine = labelFocusedStyle.Render("‹ ") + tabsLine + labelFocusedStyle.Render(" ›")
+	}
+	tabs := lipgloss.PlaceHorizontal(interior, lipgloss.Center, tabsLine)
+
+	labels := []string{"个人简介", "所在地（省 市 区）", "地区码"}
+	renderField := func(index int, label string) []string {
+		field := m.fields[index]
+		field.Width = maxInt(8, interior-6)
+		fieldStyle := lipgloss.NewStyle().
+			Width(maxInt(10, interior-2)).
+			Padding(0, 1).
+			Background(colorInputBg)
+		focused := m.focus == profileDetail && !m.userDataTabsFocus && m.fieldFocus == index
+		labelStyleToUse := labelStyle
+		prefix := "  "
+		if focused {
+			labelStyleToUse = labelFocusedStyle
+			prefix = "▸ "
+		}
+		out := []string{labelStyleToUse.Render(truncate(prefix+label, interior))}
+		out = append(out, strings.Split(fieldStyle.Render(field.View()), "\n")...)
+		return out
+	}
+
+	var content []string
+	content = append(content, title, tabs)
+	for i, label := range labels {
+		content = append(content, renderField(i, label)...)
+	}
+	cancel := dialogCancelStyle.Render("取消")
+	save := dialogPrimaryStyle.Render("保存")
+	content = append(content, lipgloss.PlaceHorizontal(interior, lipgloss.Center,
+		lipgloss.JoinHorizontal(lipgloss.Top, cancel, "  ", save)))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 2).
+		Render(strings.Join(content, "\n"))
+	boxLines := strings.Split(box, "\n")
+
+	top := maxInt(0, (bodyH-len(boxLines))/2)
+	out := make([]string, 0, bodyH)
+	for i := 0; i < top && len(out) < bodyH; i++ {
+		out = append(out, padLine("", width))
+	}
+	for _, line := range boxLines {
+		if len(out) >= bodyH {
+			break
+		}
+		out = append(out, padLine(lipgloss.PlaceHorizontal(width, lipgloss.Center, line), width))
+	}
+	for len(out) < bodyH {
+		out = append(out, padLine("", width))
+	}
+	return out
 }
 
 // addFriendDialog renders the centered add-friend dialog.
@@ -1206,7 +1499,13 @@ func (m homeModel) viewHints() string {
 			if m.detail == detailFormAddFriend {
 				return "Tab 切换字段/类型 · ←→ 切换类型 · Enter 发送申请 · Esc 取消"
 			}
+			if m.detail == detailFormUserData {
+				return "Tab 切换字段/性别 · ←→ 切换性别 · Enter 保存 · Esc 取消"
+			}
 			return "Tab/↑↓ 切换字段 · Enter 提交 · Esc 返回菜单"
+		}
+		if m.detail == detailUserData {
+			return "Enter 修改资料 · Esc 返回菜单 · Tab 切换焦点"
 		}
 		return "Enter 确认 · Esc 返回菜单 · Tab 切换焦点"
 	default:

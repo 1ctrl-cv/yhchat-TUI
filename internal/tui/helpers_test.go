@@ -68,6 +68,7 @@ type testServer struct {
 	olderRequests      []string // before-msg ids requested for history paging
 	dismissed          []string // conversation ids marked as read
 	recalled           []testRecallRecord
+	userData           map[string]any // saved personal-profile fields
 }
 
 // testRecallRecord records one recall request.
@@ -228,24 +229,44 @@ func newTestServer(t *testing.T) *testServer {
 	})
 
 	mux.HandleFunc("/v1/user/get-user-data", func(w http.ResponseWriter, r *http.Request) {
+		ts.mu.Lock()
+		saved := map[string]any{}
+		for k, v := range ts.userData {
+			saved[k] = v
+		}
+		ts.mu.Unlock()
+		data := map[string]any{
+			"id":            1,
+			"userId":        testUserID,
+			"introduction":  "这是测试简介",
+			"gender":        1,
+			"birthday":      946656000,
+			"province":      "北京市",
+			"city":          "北京城区",
+			"district":      "东城区",
+			"locationCode":  "110101",
+			"lastLoginTime": 1710000000,
+			"update_time":   1710000100,
+		}
+		for k, v := range saved {
+			data[k] = v
+		}
 		writeTestJSON(w, map[string]any{
 			"code": 1, "msg": "success",
-			"data": map[string]any{
-				"data": map[string]any{
-					"id":            1,
-					"userId":        testUserID,
-					"introduction":  "这是测试简介",
-					"gender":        1,
-					"birthday":      946656000,
-					"province":      "北京市",
-					"city":          "北京城区",
-					"district":      "东城区",
-					"locationCode":  "110101",
-					"lastLoginTime": 1710000000,
-					"update_time":   1710000100,
-				},
-			},
+			"data": map[string]any{"data": data},
 		})
+	})
+
+	mux.HandleFunc("/v1/user/save-user-data", func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			writeTestJSON(w, map[string]any{"code": -1, "msg": "参数错误"})
+			return
+		}
+		ts.mu.Lock()
+		ts.userData = payload
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
 	})
 
 	mux.HandleFunc("/v1/community/ba/following-ba-list", func(w http.ResponseWriter, r *http.Request) {

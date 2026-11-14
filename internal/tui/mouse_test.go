@@ -205,3 +205,31 @@ func TestMouseProfileMenuAndDialog(t *testing.T) {
 		t.Fatalf("detail = %v, want empty after cancel", app.home.detail)
 	}
 }
+
+func TestMouseProfileUserDataEditButton(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	openHomeScreen(t, app)
+
+	// Open 个人资料 via its menu row.
+	inner := app.home.innerWidth()
+	menuW := app.home.menuPanelWidth(inner)
+	menuStart := sidebarWidth + panelGap
+	x, y := mouseTerminalXY(menuStart+2, 5+2)
+	cmd := clickMouse(t, app, x, y)
+	applyAll(t, app, cmd)
+	if app.home.detail != detailUserData {
+		t.Fatalf("detail = %v, want user data", app.home.detail)
+	}
+
+	// Click the 修改 button on the bottom row.
+	detailStart := menuStart + menuW + panelGap
+	bodyH := app.home.bodyHeight()
+	x, y = mouseTerminalXY(detailStart+4, bodyH-1)
+	cmd = clickMouse(t, app, x, y)
+	applyAll(t, app, cmd)
+	if app.home.detail != detailFormUserData {
+		t.Fatalf("detail = %v, want edit form", app.home.detail)
+	}
+}
