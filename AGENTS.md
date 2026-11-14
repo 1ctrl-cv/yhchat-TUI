@@ -79,7 +79,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 ## 安全
 
 - 不提交 token/密码/个人配置；`dist/`、`.gopath/`、`.gocache/`、`.gomodcache/`、`_tools/` 已在 `.gitignore`。
-- 运行时 token 只保存在 `~/.yhchat-tui/config.json`（0600；Windows 为 `%USERPROFILE%\.yhchat-tui\config.json`），不打印到 UI/日志。
+- 运行时 token 只保存在 `~/.yhchat-tui/config.json`（0600；Windows 为 `%USERPROFILE%\.yhchat-tui\config.json`），不打印到 UI/日志。短信手机号只保存掩码形式（如 `138****1234`），不得回填/显示明文号码。
 - 不要把用户的真实 token 硬编码进源码或测试。
 
 ## Git 约定
@@ -93,6 +93,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 上游 API 文档：`../yhchatAPI/src/api/v1/*.md`、`../yhchatAPI/src/full.proto`、`../yhchatAPI/src/api/wss/`
 - 本项目 API 实测记录：[`docs/API_NOTES.md`](docs/API_NOTES.md)
 - 登录里程碑独立验收报告：[`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+
 
 
 

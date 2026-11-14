@@ -66,6 +66,20 @@ func DefaultPath() (string, error) {
 	return filepath.Join(home, configDirName, "config.json"), nil
 }
 
+// maskStoredMobile masks an 11-digit plain mobile number, returning the new
+// value and whether it changed. Already masked or non-mobile values are kept.
+func maskStoredMobile(mobile string) (string, bool) {
+	if len(mobile) != 11 {
+		return mobile, false
+	}
+	for _, r := range mobile {
+		if r < '0' || r > '9' {
+			return mobile, false
+		}
+	}
+	return mobile[:3] + "****" + mobile[7:], true
+}
+
 // legacyPath returns the previous config location
 // (<user config dir>/yhchat-tui/config.json), or "" when unavailable or when
 // the location is explicitly overridden with YHCHAT_CONFIG_DIR.
@@ -121,6 +135,13 @@ func Load(path string) (*Store, error) {
 				warn = fmt.Errorf("配置文件已损坏，已备份为 %s.bad: %w", path, jsErr)
 			}
 		}
+	}
+
+	// Never persist a plain mobile number: the login screen only needs it as a
+	// masked hint, so legacy plain values are hashed the same way.
+	if masked, changed := maskStoredMobile(s.Data.LastMobile); changed {
+		s.Data.LastMobile = masked
+		migrated = true
 	}
 
 	// Stable device id across restarts; also used by SMS login.

@@ -52,7 +52,7 @@ func TestSaveAndClearToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if loaded.Data.Token != "token-123" || loaded.Data.LoginMethod != "sms" || loaded.Data.LastMobile != "13800001234" {
+	if loaded.Data.Token != "token-123" || loaded.Data.LoginMethod != "sms" || loaded.Data.LastMobile != "138****1234" {
 		t.Fatalf("unexpected reloaded config: %+v", loaded.Data)
 	}
 
@@ -66,7 +66,7 @@ func TestSaveAndClearToken(t *testing.T) {
 	if reloaded.Data.Token != "" {
 		t.Fatalf("token not cleared: %q", reloaded.Data.Token)
 	}
-	if reloaded.Data.LastMobile != "13800001234" {
+	if reloaded.Data.LastMobile != "138****1234" {
 		t.Fatalf("preferences lost after clearing token: %+v", reloaded.Data)
 	}
 }
@@ -212,5 +212,43 @@ func TestLoadMigratesLegacyConfig(t *testing.T) {
 	}
 	if migrated.Data.Token != "legacy-token" {
 		t.Fatalf("migrated token = %q", migrated.Data.Token)
+	}
+}
+
+func TestLoadMasksPlainMobile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw, _ := json.Marshal(Config{Token: "tok", DeviceID: "dev-1", LastMobile: "13800001234"})
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if store.Data.LastMobile != "138****1234" {
+		t.Fatalf("last mobile = %q", store.Data.LastMobile)
+	}
+	// The sanitized value must be persisted.
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.Data.LastMobile != "138****1234" {
+		t.Fatalf("persisted last mobile = %q", reloaded.Data.LastMobile)
+	}
+}
+
+func TestLoadKeepsMaskedMobile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw, _ := json.Marshal(Config{DeviceID: "dev-1", LastMobile: "138****1234"})
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if store.Data.LastMobile != "138****1234" {
+		t.Fatalf("last mobile = %q", store.Data.LastMobile)
 	}
 }

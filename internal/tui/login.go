@@ -107,8 +107,10 @@ func newLoginModel(client *api.Client, prefs config.Config) loginModel {
 	if prefs.LastEmail != "" {
 		m.email.SetValue(prefs.LastEmail)
 	}
+	// The remembered mobile number is only shown as a masked placeholder: the
+	// input itself stays empty so the full number is never rendered on screen.
 	if prefs.LastMobile != "" {
-		m.phone.SetValue(prefs.LastMobile)
+		m.phone.Placeholder = maskPhone(prefs.LastMobile)
 	}
 	return m
 }

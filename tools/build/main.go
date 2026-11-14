@@ -341,11 +341,19 @@ func checkFormatting(goBin string) error {
 // defaultTargets are all common Windows/Linux architectures.
 func defaultTargets() []target {
 	return []target{
+		// Windows
 		{OS: "windows", Arch: "386"},
 		{OS: "windows", Arch: "amd64"},
 		{OS: "windows", Arch: "arm64"},
+
+		// MacOS
+		{OS: "darwin", Arch: "amd64"},
+		{OS: "darwin", Arch: "arm64"},
+
+		// Linux
 		{OS: "linux", Arch: "386"},
 		{OS: "linux", Arch: "amd64"},
+		{OS: "linux", Arch: "arm", GOARM: "6"},
 		{OS: "linux", Arch: "arm", GOARM: "7"},
 		{OS: "linux", Arch: "arm64"},
 		{OS: "linux", Arch: "loong64"},
@@ -371,8 +379,8 @@ func parseTargets(spec string) ([]target, error) {
 			OS:   strings.ToLower(parts[0]),
 			Arch: strings.ToLower(parts[1]),
 		}
-		if t.OS != "windows" && t.OS != "linux" {
-			return nil, fmt.Errorf("不支持的目标系统: %s（只支持 windows 与 linux）", t.OS)
+		if t.OS != "windows" && t.OS != "linux" && t.OS != "darwin" {
+			return nil, fmt.Errorf("不支持的目标系统: %s（只支持 windows、linux 与 darwin）", t.OS)
 		}
 		if t.Arch == "arm" {
 			t.GOARM = "7"

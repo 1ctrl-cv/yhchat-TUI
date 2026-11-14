@@ -237,7 +237,8 @@ func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 	a.store.Data.LoginMethod = msg.method
 	switch msg.method {
 	case "sms":
-		a.store.Data.LastMobile = msg.account
+		// Store only the masked number: the login screen just needs it as a hint.
+		a.store.Data.LastMobile = maskPhone(msg.account)
 	case "email":
 		a.store.Data.LastEmail = msg.account
 	}
