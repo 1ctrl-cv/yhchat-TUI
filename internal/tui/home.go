@@ -91,6 +91,8 @@ func (m homeModel) Update(msg tea.Msg) (homeModel, tea.Cmd) {
 		switch msg.String() {
 		case "r":
 			return m.startRefresh()
+		case "c":
+			return m, func() tea.Msg { return openChatMsg{} }
 		case "l":
 			return m, logoutCmd(m.client, m.token)
 		case "q":
@@ -132,7 +134,7 @@ func (m homeModel) View() string {
 		titleAccentStyle.Render("▌ 云湖 TUI"),
 		headerRight,
 		body,
-		"r 刷新 · l 退出登录 · q 退出 · Ctrl+C 退出",
+		"c 聊天 · r 刷新 · l 退出登录 · q 退出",
 	)
 }
 

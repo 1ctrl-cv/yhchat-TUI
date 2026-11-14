@@ -46,13 +46,14 @@ const (
 type server struct {
 	mu     sync.Mutex
 	tokens map[string]string // token -> account (email or mobile)
+	chat   *chatStore
 }
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:18080", "listen address")
 	flag.Parse()
 
-	s := &server{tokens: map[string]string{}}
+	s := &server{tokens: map[string]string{}, chat: newChatStore()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/user/captcha", s.handleCaptcha)
@@ -61,6 +62,10 @@ func main() {
 	mux.HandleFunc("/v1/user/verification-login", s.handleSMSLogin)
 	mux.HandleFunc("/v1/user/info", s.handleUserInfo)
 	mux.HandleFunc("/v1/user/logout", s.handleLogout)
+	mux.HandleFunc("/v1/conversation/list", s.handleConversationList)
+	mux.HandleFunc("/v1/conversation/dismiss-notification", s.handleDismissNotification)
+	mux.HandleFunc("/v1/msg/list-message", s.handleListMessage)
+	mux.HandleFunc("/v1/msg/send-message", s.handleSendMessage)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("404 %s %s", r.Method, r.URL.Path)
 		writeJSON(w, http.StatusNotFound, map[string]any{"code": -404, "msg": "not found"})

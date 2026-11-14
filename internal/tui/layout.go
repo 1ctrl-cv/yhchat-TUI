@@ -39,6 +39,37 @@ func flattenLines(entries []string) []string {
 	return lines
 }
 
+// wrapText wraps s to lines of at most width terminal cells. It works for CJK
+// text (which has no spaces) and keeps explicit newlines.
+func wrapText(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	var lines []string
+	for _, paragraph := range strings.Split(s, "\n") {
+		if paragraph == "" {
+			lines = append(lines, "")
+			continue
+		}
+		var line strings.Builder
+		lineWidth := 0
+		for _, r := range paragraph {
+			w := lipgloss.Width(string(r))
+			if lineWidth+w > width && line.Len() > 0 {
+				lines = append(lines, line.String())
+				line.Reset()
+				lineWidth = 0
+			}
+			line.WriteRune(r)
+			lineWidth += w
+		}
+		if line.Len() > 0 {
+			lines = append(lines, line.String())
+		}
+	}
+	return lines
+}
+
 // screenChrome composes a screen that fills the whole terminal:
 //
 //	row 0        header: left title, right status

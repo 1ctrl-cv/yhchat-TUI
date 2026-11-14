@@ -48,3 +48,40 @@ type homeUserMsg struct {
 // expiringTokenMsg asks the App to drop the token and return to the login
 // screen because the server rejected it.
 type expiringTokenMsg struct{ err error }
+
+// ---------------------------------------------------------------------------
+// Main window (chat) messages
+
+// conversationsLoadedMsg carries a refreshed conversation list.
+type conversationsLoadedMsg struct {
+	conversations []api.Conversation
+	err           error
+}
+
+// messagesLoadedMsg carries the history of one conversation.
+type messagesLoadedMsg struct {
+	chatID   string
+	chatType api.ChatType
+	messages []api.Message
+	err      error
+}
+
+// messageSentMsg reports the result of sending a text message.
+type messageSentMsg struct {
+	chatID string
+	msgID  string
+	text   string
+	err    error
+}
+
+// chatUserMsg carries the account profile needed to mark own messages.
+type chatUserMsg struct {
+	user *api.UserInfo
+	err  error
+}
+
+// openHomeMsg asks the App to show the account ("我的") screen.
+type openHomeMsg struct{}
+
+// openChatMsg asks the App to show the main chat window.
+type openChatMsg struct{}

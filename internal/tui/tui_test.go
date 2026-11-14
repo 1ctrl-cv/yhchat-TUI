@@ -33,14 +33,17 @@ func TestEmailLoginFlow(t *testing.T) {
 
 	loginEmail(t, app)
 
-	if app.screen != screenHome {
-		t.Fatalf("screen = %v, want home", app.screen)
+	if app.screen != screenChat {
+		t.Fatalf("screen = %v, want chat", app.screen)
 	}
-	if app.home.user == nil || app.home.user.Data == nil {
-		t.Fatalf("home profile missing: %+v", app.home.user)
+	if app.chat.user == nil || app.chat.user.Data == nil {
+		t.Fatalf("chat profile missing: %+v", app.chat.user)
 	}
-	if app.home.user.Data.Name != testName {
-		t.Fatalf("name = %q", app.home.user.Data.Name)
+	if app.chat.user.Data.Name != testName {
+		t.Fatalf("name = %q", app.chat.user.Data.Name)
+	}
+	if len(app.chat.conversations) != 2 {
+		t.Fatalf("conversations = %d, want 2", len(app.chat.conversations))
 	}
 	if store.Data.Token != testToken {
 		t.Fatalf("stored token = %q", store.Data.Token)
@@ -52,7 +55,17 @@ func TestEmailLoginFlow(t *testing.T) {
 		t.Fatalf("config file not persisted: %v", err)
 	}
 
-	view := app.home.View()
+	// The login milestone now lands on the chat window; the account page is
+	// reachable from the sidebar ("我的").
+	chatView := app.View()
+	for _, want := range []string{"测试群", "小明", "大家好"} {
+		if !strings.Contains(chatView, want) {
+			t.Errorf("chat view missing %q\n%s", want, chatView)
+		}
+	}
+
+	openHomeScreen(t, app)
+	view := app.View()
 	for _, want := range []string{testName, testUserID, "已登录", "138****1234", "d***@yunhu.chat", "YH-TEST-0001"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("home view missing %q\n%s", want, view)
@@ -112,8 +125,8 @@ func TestSMSLoginFlow(t *testing.T) {
 
 	loginSMS(t, app)
 
-	if app.screen != screenHome {
-		t.Fatalf("screen = %v, want home", app.screen)
+	if app.screen != screenChat {
+		t.Fatalf("screen = %v, want chat", app.screen)
 	}
 	if store.Data.Token != testToken || store.Data.LoginMethod != "sms" {
 		t.Fatalf("stored config = %+v", store.Data)
@@ -249,13 +262,17 @@ func TestAutoLoginWithStoredToken(t *testing.T) {
 	if msg.err != nil {
 		t.Fatalf("auto login error: %v", msg.err)
 	}
-	app.Update(msg)
-
-	if app.screen != screenHome {
-		t.Fatalf("screen = %v, want home", app.screen)
+	_, loadCmd := app.Update(msg)
+	if loadCmd == nil {
+		t.Fatal("auto login did not start loading conversations")
 	}
-	if app.home.user == nil || app.home.user.Data.Name != testName {
-		t.Fatalf("profile missing: %+v", app.home.user)
+	app.Update(waitFor[conversationsLoadedMsg](t, loadCmd))
+
+	if app.screen != screenChat {
+		t.Fatalf("screen = %v, want chat", app.screen)
+	}
+	if app.chat.user == nil || app.chat.user.Data.Name != testName {
+		t.Fatalf("profile missing: %+v", app.chat.user)
 	}
 }
 
@@ -291,6 +308,7 @@ func TestLogoutFlow(t *testing.T) {
 	ts := newTestServer(t)
 	app, store := newTestApp(t, ts)
 	loginEmail(t, app)
+	openHomeScreen(t, app)
 
 	// Press "l" on the home screen.
 	cmd := sendKeyRunes(t, app, 'l')
@@ -321,6 +339,7 @@ func TestRefreshOnHome(t *testing.T) {
 	ts := newTestServer(t)
 	app, _ := newTestApp(t, ts)
 	loginEmail(t, app)
+	openHomeScreen(t, app)
 
 	cmd := sendKeyRunes(t, app, 'r')
 	msg := waitFor[homeUserMsg](t, cmd)
@@ -354,6 +373,7 @@ func TestQuitKeys(t *testing.T) {
 
 	// "q" quits from the home screen.
 	loginEmail(t, app)
+	openHomeScreen(t, app)
 	cmd = sendKeyRunes(t, app, 'q')
 	if cmd == nil {
 		t.Fatal("q did not return a command")
@@ -427,10 +447,12 @@ func TestViewFitsTerminal(t *testing.T) {
 		app.Update(waitFor[captchaLoadedMsg](t, cmd))
 		check("login_sms_captcha", app.View())
 
-		// Home screen.
+		// Chat window and home screen.
 		prefsApp, _ := newTestApp(t, ts)
 		prefsApp.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
 		loginEmail(t, prefsApp)
+		check("chat", prefsApp.View())
+		openHomeScreen(t, prefsApp)
 		check("home", prefsApp.View())
 	}
 }

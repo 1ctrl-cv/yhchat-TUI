@@ -74,10 +74,19 @@ func TestViewSnapshots(t *testing.T) {
 	app.Update(waitFor[smsSentMsg](t, cmd))
 	snap.check("login_sms_code", app.View())
 
-	// Home screen after login.
+	// Main window (chat) after login: conversation list + message history.
 	setSMSForm(app, "13800001234", "abcd", testSMSCode)
 	cmd = sendKey(t, app, tea.KeyEnter)
-	app.Update(waitFor[loginSucceededMsg](t, cmd))
+	_, loadCmd := app.Update(waitFor[loginSucceededMsg](t, cmd))
+	if loadCmd != nil {
+		convMsg := waitFor[conversationsLoadedMsg](t, loadCmd)
+		_, msgCmd := app.Update(convMsg)
+		loadChatMessages(t, app, msgCmd)
+	}
+	snap.check("chat", app.View())
+
+	// Account ("我的") screen.
+	openHomeScreen(t, app)
 	snap.check("home", app.View())
 
 	// Startup splash while validating a stored token.

@@ -74,6 +74,31 @@ var (
 
 	separatorStyle = lipgloss.NewStyle().Foreground(colorBorder)
 
+	// Chat window styles.
+	dividerStyle     = lipgloss.NewStyle().Foreground(colorBorder)
+	sidebarItemStyle = lipgloss.NewStyle().
+				Foreground(colorMuted).
+				Padding(0, 1)
+	sidebarActiveStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(colorOnAccent).
+				Background(colorAccent).
+				Padding(0, 1)
+	convSelectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	convNameStyle      = lipgloss.NewStyle().Foreground(colorText)
+	convTimeStyle      = lipgloss.NewStyle().Foreground(colorMuted)
+	convPreviewStyle   = lipgloss.NewStyle().Foreground(colorMuted)
+	unreadBadgeStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	chatTitleStyle     = lipgloss.NewStyle().Bold(true).Foreground(colorText)
+	chatSubtitleStyle  = lipgloss.NewStyle().Foreground(colorMuted)
+	messageNameStyle   = lipgloss.NewStyle().Foreground(colorMuted)
+	messageOwnNameSt   = lipgloss.NewStyle().Foreground(colorAccent)
+	messageTimeStyle   = lipgloss.NewStyle().Foreground(colorMuted)
+	messageTextStyle   = lipgloss.NewStyle().Foreground(colorText)
+	messageOwnTextSt   = lipgloss.NewStyle().Foreground(colorText)
+	messageTipStyle    = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
+	chatStatusErrStyle = lipgloss.NewStyle().Foreground(colorError)
+
 	hintStyle = lipgloss.NewStyle().Foreground(colorMuted)
 
 	okStyle    = lipgloss.NewStyle().Foreground(colorSuccess)

@@ -17,7 +17,8 @@ type screen int
 const (
 	screenLogin screen = iota
 	screenSplash
-	screenHome
+	screenChat // 主窗口：会话列表 + 聊天
+	screenHome // 我的：账号信息
 )
 
 // App is the root Bubble Tea model. It owns the API client, the persisted
@@ -32,6 +33,7 @@ type App struct {
 
 	login loginModel
 	home  homeModel
+	chat  mainWindowModel
 
 	spinner spinner.Model
 }
@@ -86,6 +88,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width, a.height = msg.Width, msg.Height
 		a.login = a.login.resize(msg.Width, msg.Height)
 		a.home = a.home.resize(msg.Width, msg.Height)
+		a.chat = a.chat.resize(msg.Width, msg.Height)
 		return a, nil
 
 	case tea.KeyMsg:
@@ -106,6 +109,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case expiringTokenMsg:
 		return a, a.handleExpired()
 
+	case openHomeMsg:
+		return a, a.showHome()
+
+	case openChatMsg:
+		return a, a.showChat()
+
 	case captchaLoadedMsg, smsSentMsg, loginFailedMsg:
 		if a.screen != screenLogin {
 			return a, nil
@@ -122,6 +131,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.home, cmd = a.home.Update(msg)
 		return a, cmd
 
+	case conversationsLoadedMsg, messagesLoadedMsg, messageSentMsg, chatUserMsg:
+		if a.screen != screenChat {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.chat, cmd = a.chat.Update(msg)
+		return a, cmd
+
 	default:
 		return a.route(msg)
 	}
@@ -134,6 +151,10 @@ func (a *App) route(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenLogin:
 		var cmd tea.Cmd
 		a.login, cmd = a.login.Update(msg)
+		return a, cmd
+	case screenChat:
+		var cmd tea.Cmd
+		a.chat, cmd = a.chat.Update(msg)
 		return a, cmd
 	case screenHome:
 		var cmd tea.Cmd
@@ -150,13 +171,10 @@ func (a *App) route(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleAutoLogin processes the startup token validation result.
 func (a *App) handleAutoLogin(msg autoLoginMsg) (tea.Model, tea.Cmd) {
 	if msg.err == nil && msg.user != nil {
-		a.home = newHomeModel(a.client, a.store.Data.Token).
-			resize(a.width, a.height).
-			withUser(msg.user)
-		a.home.okText = "已自动登录"
-		a.screen = screenHome
+		a.prepareHome(msg.user, "已自动登录")
+		cmd := a.startChat(msg.user)
 		a.login = newLoginModel(a.client, a.store.Data)
-		return a, nil
+		return a, cmd
 	}
 
 	notice := "无法验证登录状态：" + api.FriendlyMessage(msg.err)
@@ -170,7 +188,7 @@ func (a *App) handleAutoLogin(msg autoLoginMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// handleLoginSuccess persists the token and shows the home screen.
+// handleLoginSuccess persists the token and opens the chat window.
 func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 	a.store.Data.Token = msg.token
 	a.store.Data.LoginMethod = msg.method
@@ -182,23 +200,58 @@ func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 	}
 	saveErr := a.store.Save()
 
-	a.home = newHomeModel(a.client, msg.token).resize(a.width, a.height)
-	if msg.user != nil {
-		a.home = a.home.withUser(msg.user)
-		a.home.okText = "登录成功，欢迎回来"
-		if saveErr != nil {
-			a.home.errText = "登录成功，但保存登录状态失败: " + saveErr.Error()
-		}
-		a.screen = screenHome
-		return a, nil
+	a.prepareHome(msg.user, "登录成功，欢迎回来")
+	cmd := a.startChat(msg.user)
+	if saveErr != nil {
+		a.chat.errText = "登录成功，但保存登录状态失败: " + saveErr.Error()
 	}
-	if msg.userErr != nil {
-		a.home.errText = "登录成功，但获取账号信息失败: " + api.FriendlyMessage(msg.userErr)
-	}
-	var cmd tea.Cmd
-	a.home, cmd = a.home.startRefresh()
-	a.screen = screenHome
 	return a, cmd
+}
+
+// prepareHome (re)builds the account screen for a logged in account.
+func (a *App) prepareHome(user *api.UserInfo, okText string) {
+	a.home = newHomeModel(a.client, a.store.Data.Token).resize(a.width, a.height)
+	if user != nil {
+		a.home = a.home.withUser(user)
+		a.home.okText = okText
+	}
+}
+
+// startChat creates the main window for the current token and starts loading
+// the conversation list.
+func (a *App) startChat(user *api.UserInfo) tea.Cmd {
+	a.chat = newMainWindowModel(a.client, a.store.Data.Token, user).resize(a.width, a.height)
+	a.screen = screenChat
+	var cmd tea.Cmd
+	a.chat, cmd = a.chat.init()
+	if user == nil {
+		cmd = tea.Batch(cmd, fetchChatUserCmd(a.client, a.store.Data.Token))
+	}
+	return cmd
+}
+
+// showHome switches to the account ("我的") screen.
+func (a *App) showHome() tea.Cmd {
+	if a.store.Data.Token == "" {
+		return nil
+	}
+	if a.home.user == nil && a.chat.user != nil {
+		a.home = a.home.withUser(a.chat.user)
+	}
+	a.screen = screenHome
+	return nil
+}
+
+// showChat switches back to the chat window, refreshing the conversation list.
+func (a *App) showChat() tea.Cmd {
+	if a.store.Data.Token == "" {
+		return nil
+	}
+	if a.chat.token == "" || a.chat.token != a.store.Data.Token {
+		return a.startChat(a.chat.user)
+	}
+	a.screen = screenChat
+	return loadConversationsCmd(a.client, a.chat.token)
 }
 
 // handleLogoutDone clears the token and returns to the login screen.
@@ -211,6 +264,7 @@ func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
 	case msg.err != nil && !api.IsSessionExpired(msg.err):
 		notice = "已退出登录（服务器注销请求失败）"
 	}
+	a.chat = mainWindowModel{}
 	return a.resetLogin(notice)
 }
 
@@ -220,6 +274,7 @@ func (a *App) handleExpired() tea.Cmd {
 	if clearErr := a.store.ClearToken(); clearErr != nil {
 		notice += "（本地登录状态清除失败）"
 	}
+	a.chat = mainWindowModel{}
 	return a.resetLogin(notice)
 }
 
@@ -238,6 +293,8 @@ func (a *App) View() string {
 	switch a.screen {
 	case screenSplash:
 		return a.viewSplash()
+	case screenChat:
+		return a.chat.View()
 	case screenHome:
 		return a.home.View()
 	default:
