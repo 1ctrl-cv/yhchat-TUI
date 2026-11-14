@@ -7,12 +7,12 @@
 # 用法：
 #   ./scripts/build.sh                          # 全量构建（默认输出到 dist/）
 #   ./scripts/build.sh -version 1.0.0           # 指定版本号
-#   ./scripts/build.sh -skip-tests -no-archive  # 跳过测试、不打包
+#   ./scripts/build.sh -skip-tests              # 跳过测试
 #   ./scripts/build.sh -targets windows/amd64,linux/amd64
 #   ./scripts/build.sh -help
 #
-# 一条命令完成：代码检查（gofmt/go vet）→ 测试 → Windows/Linux 全架构交叉编译
-# → 注入版本/commit/构建时间 → 生成 zip/tar.gz → SHA256SUMS.txt + BUILD-INFO.txt。
+# 一条命令完成：代码检查（gofmt/go vet）→ 测试 → Windows/Linux 全架构交叉编译，
+# 并为每个目标注入版本/commit/构建时间。产物只有各平台可执行文件，不做打包。
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -24,3 +24,4 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 exec go run ./tools/build "$@"
+

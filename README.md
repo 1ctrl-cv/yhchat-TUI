@@ -44,7 +44,8 @@ WebSocket 实时收发放到下一阶段（当前需手动刷新）。
 
 ### 全量构建（推荐）
 
-一条命令完成：代码检查（gofmt / go vet）→ 测试 → Windows / Linux 全架构交叉编译 → 注入版本信息 → 打包 → 校验和。
+一条命令完成：代码检查（gofmt / go vet）→ 测试 → Windows / Linux 全架构交叉编译，
+并为每个目标注入版本 / commit / 构建时间。**产物只有各平台的可执行文件，不做打包。**
 
 ```powershell
 # Windows（PowerShell 7 或 Windows PowerShell 5.1）
@@ -68,7 +69,7 @@ pwsh -File scripts\build.ps1
 | `-targets <列表>` | 目标列表，逗号分隔，如 `windows/amd64,linux/amd64` |
 | `-skip-checks` | 跳过 gofmt / go vet |
 | `-skip-tests` | 跳过 go test |
-| `-no-archive` | 只生成可执行文件，不打包 |
+
 | `-no-clean` | 构建前不清空输出目录 |
 
 默认目标（9 个）：
@@ -78,16 +79,12 @@ pwsh -File scripts\build.ps1
 | Windows | 386、amd64、arm64 |
 | Linux | 386、amd64、arm(v7)、arm64、loong64、riscv64 |
 
-产物示例（`dist/`）：
+产物示例（`dist/`，只有可执行文件）：
 
 ```
 dist/
 ├── yhchat-tui-windows-386.exe / -amd64.exe / -arm64.exe
-├── yhchat-tui-linux-386 / -amd64 / -arm / -arm64 / -loong64 / -riscv64
-├── yhchat-tui-<版本>-windows-amd64.zip          # 每个平台的 release 包（含 README）
-├── yhchat-tui-<版本>-linux-amd64.tar.gz
-├── SHA256SUMS.txt                               # 所有产物的 SHA-256
-└── BUILD-INFO.txt                               # 版本 / commit / 构建时间 / 目标清单
+└── yhchat-tui-linux-386 / -amd64 / -arm / -arm64 / -loong64 / -riscv64
 ```
 
 ### 单平台构建
@@ -194,7 +191,7 @@ internal/tui/              登录页、主窗口（会话+聊天）、账号页�
 internal/captchaimg/       图形验证码 → 终端 ANSI 半块字符渲染
 internal/captchaimg/testdata/captcha.png   真实验证码测试图
 tools/mockapi/             本地 mock API（登录 / 会话列表 / 消息历史 / 发送，演示可玩主窗口）
-tools/build/               跨平台全量构建器（检查、测试、交叉编译、打包、校验和）
+tools/build/               跨平台全量构建器（检查、测试、交叉编译，只产出可执行文件）
 docs/API_NOTES.md          本项目实际调用的 API 实测记录
 docs/VERIFICATION.md       独立验收报告（构建 / API 契约 / 安全 / TUI 检查，结论 PASS）
 scripts/build.ps1          全量构建入口（Windows / PowerShell）
@@ -218,4 +215,5 @@ vendor/                    依赖（离线构建）
 
 本项目为第三方非官方实现，与云湖官方无关。API 属于公开文档记录的接口，可能随时变更；
 请勿将本项目用于违反服务条款的用途，并妥善保管自己的账号凭据与 token。
+
 

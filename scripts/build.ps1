@@ -7,8 +7,8 @@
     实际构建逻辑在 tools/build（Go 实现，跨平台），因此 Windows 与 Linux 产物
     完全一致。本脚本只做参数转发。
 
-    一条命令完成：代码检查（gofmt/go vet）→ 测试 → Windows/Linux 全架构交叉编译
-    → 注入版本/commit/构建时间 → 生成 zip/tar.gz → SHA256SUMS.txt + BUILD-INFO.txt。
+    一条命令完成：代码检查（gofmt/go vet）→ 测试 → Windows/Linux 全架构交叉编译，
+    并为每个目标注入版本/commit/构建时间。产物只有各平台的可执行文件，不做打包。
 
     默认输出目录为仓库下的 dist/。
 
@@ -29,8 +29,6 @@
 .PARAMETER SkipTests
     跳过 go test。
 
-.PARAMETER NoArchive
-    只生成可执行文件，不生成压缩包。
 
 .PARAMETER NoClean
     构建前不清空输出目录。
@@ -42,7 +40,7 @@
     pwsh -File scripts\build.ps1 -Version 1.0.0 -SkipTests
 
 .EXAMPLE
-    pwsh -File scripts\build.ps1 -Targets windows/amd64,linux/amd64 -NoArchive
+    pwsh -File scripts\build.ps1 -Targets windows/amd64,linux/amd64
 #>
 [CmdletBinding()]
 param(
@@ -61,8 +59,6 @@ param(
     [Alias("skip-tests")]
     [switch]$SkipTests,
 
-    [Alias("no-archive")]
-    [switch]$NoArchive,
 
     [Alias("no-clean")]
     [switch]$NoClean,
@@ -85,7 +81,6 @@ if ($Out) { $goArgs += @("-out", $Out) }
 if ($Targets) { $goArgs += @("-targets", $Targets) }
 if ($SkipChecks) { $goArgs += "-skip-checks" }
 if ($SkipTests) { $goArgs += "-skip-tests" }
-if ($NoArchive) { $goArgs += "-no-archive" }
 if ($NoClean) { $goArgs += "-no-clean" }
 if ($Help) { $goArgs += "-help" }
 
@@ -101,4 +96,5 @@ catch {
 finally {
     Pop-Location
 }
+
 

@@ -1,42 +1,29 @@
-// Command build is the cross-platform release builder for yhchat-tui.
+// Command build is the cross-platform builder for yhchat-tui.
 //
-// It is the implementation behind scripts/build.ps1 and scripts/build.sh, so
-// Windows and Linux produce identical release artifacts:
+// It is the implementation behind scripts/build.ps1 and scripts/build.sh:
 //
 //  1. gofmt check + go vet            (disable with -skip-checks)
 //  2. go test ./... -count=1          (disable with -skip-tests)
-//  3. cross-compile Windows/Linux targets
+//  3. cross-compile Windows/Linux targets into the output directory
 //  4. inject version, git commit and build time via -ldflags
-//  5. package release archives (windows .zip, linux .tar.gz)
-//  6. write SHA256SUMS.txt and BUILD-INFO.txt
 //
-// Only the Go toolchain is required: archives and checksums are produced with
-// the standard library, so no zip/tar/sha256sum binaries are needed.
+// The output is one executable per GOOS/GOARCH target; no archives or extra
+// metadata files are produced.
 package main
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 )
 
-const (
-	appName    = "yhchat-tui"
-	readmeName = "README.md"
-)
+const appName = "yhchat-tui"
 
 // options holds the command line configuration.
 type options struct {
@@ -45,7 +32,6 @@ type options struct {
 	targets    string
 	skipChecks bool
 	skipTests  bool
-	noArchive  bool
 	noClean    bool
 }
 
@@ -85,7 +71,6 @@ func main() {
 	fs.StringVar(&opts.targets, "targets", "", "目标列表，逗号或空格分隔（默认全部常用 Windows/Linux 架构）")
 	fs.BoolVar(&opts.skipChecks, "skip-checks", false, "跳过 gofmt / go vet")
 	fs.BoolVar(&opts.skipTests, "skip-tests", false, "跳过 go test")
-	fs.BoolVar(&opts.noArchive, "no-archive", false, "只生成可执行文件，不打包")
 	fs.BoolVar(&opts.noClean, "no-clean", false, "构建前不清空输出目录")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -122,14 +107,15 @@ func usageText() string {
                     linux/loong64 linux/riscv64
   -skip-checks      跳过 gofmt / go vet
   -skip-tests       跳过 go test
-  -no-archive       只生成可执行文件，不生成 zip/tar.gz
   -no-clean         构建前不清空输出目录
   -h, -help         显示本帮助
+
+产物为每个目标一个可执行文件（不生成压缩包/校验和等额外文件）。
 
 示例:
   go run ./tools/build
   go run ./tools/build -version 1.0.0 -skip-tests
-  go run ./tools/build -targets windows/amd64,linux/amd64 -no-archive
+  go run ./tools/build -targets windows/amd64,linux/amd64
 `
 }
 
@@ -226,30 +212,7 @@ func run(opts options) error {
 		ok("%s", strings.TrimSpace(text))
 	}
 
-	// -----------------------------------------------------------------
-	var archives []string
-	if opts.noArchive {
-		step("跳过压缩包（-no-archive）")
-	} else {
-		step("生成 release 压缩包")
-		archives, err = archiveAll(root, outDir, meta, artifacts)
-		if err != nil {
-			return err
-		}
-	}
-
-	// -----------------------------------------------------------------
-	step("生成构建信息与校验和")
-	infoPath := filepath.Join(outDir, "BUILD-INFO.txt")
-	if err := writeBuildInfo(infoPath, meta, artifacts, archives); err != nil {
-		return err
-	}
-	sumPath := filepath.Join(outDir, "SHA256SUMS.txt")
-	if err := writeChecksums(outDir, sumPath); err != nil {
-		return err
-	}
-
-	printSummary(artifacts, archives, sumPath, infoPath)
+	printSummary(artifacts, outDir)
 	return nil
 }
 
@@ -523,228 +486,6 @@ func findArtifact(artifacts []artifact, osName, arch string) *artifact {
 }
 
 // ---------------------------------------------------------------------------
-// packaging
-
-// archiveAll writes release archives and returns their file names.
-func archiveAll(root, outDir string, meta *buildMeta, artifacts []artifact) ([]string, error) {
-	readmePath := filepath.Join(root, readmeName)
-	archives := make([]string, 0, len(artifacts))
-	for _, a := range artifacts {
-		base := fmt.Sprintf("%s-%s-%s-%s", appName, safeFileName(meta.Version), a.OS, a.Arch)
-		var archivePath string
-		var err error
-		if a.OS == "windows" {
-			archivePath = filepath.Join(outDir, base+".zip")
-			err = writeZip(archivePath, a, readmePath)
-		} else {
-			archivePath = filepath.Join(outDir, base+".tar.gz")
-			err = writeTarGz(archivePath, a, readmePath)
-		}
-		if err != nil {
-			return nil, err
-		}
-		info, statErr := os.Stat(archivePath)
-		if statErr != nil {
-			return nil, fmt.Errorf("压缩包缺失: %w", statErr)
-		}
-		ok("%s (%.1f KB)", filepath.Base(archivePath), float64(info.Size())/1024)
-		archives = append(archives, filepath.Base(archivePath))
-	}
-	return archives, nil
-}
-
-// writeZip packages a Windows executable.
-func writeZip(archivePath string, a artifact, readmePath string) error {
-	out, err := os.Create(archivePath)
-	if err != nil {
-		return fmt.Errorf("创建压缩包失败: %w", err)
-	}
-	defer func() { _ = out.Close() }()
-
-	zw := zip.NewWriter(out)
-	if err := addToZip(zw, a.Name, a.Path); err != nil {
-		return err
-	}
-	if _, statErr := os.Stat(readmePath); statErr == nil {
-		if err := addToZip(zw, readmeName, readmePath); err != nil {
-			return err
-		}
-	}
-	if err := zw.Close(); err != nil {
-		return fmt.Errorf("写入压缩包失败: %w", err)
-	}
-	return nil
-}
-
-// addToZip copies one file into the zip writer.
-func addToZip(zw *zip.Writer, name, path string) error {
-	src, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("读取 %s 失败: %w", path, err)
-	}
-	defer func() { _ = src.Close() }()
-	info, err := src.Stat()
-	if err != nil {
-		return fmt.Errorf("读取 %s 信息失败: %w", path, err)
-	}
-	header, err := zip.FileInfoHeader(info)
-	if err != nil {
-		return fmt.Errorf("构建压缩包条目失败: %w", err)
-	}
-	header.Name = name
-	header.Method = zip.Deflate
-	dst, err := zw.CreateHeader(header)
-	if err != nil {
-		return fmt.Errorf("写入压缩包失败: %w", err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		return fmt.Errorf("写入压缩包失败: %w", err)
-	}
-	return nil
-}
-
-// writeTarGz packages a Linux executable.
-func writeTarGz(archivePath string, a artifact, readmePath string) error {
-	out, err := os.Create(archivePath)
-	if err != nil {
-		return fmt.Errorf("创建压缩包失败: %w", err)
-	}
-	defer func() { _ = out.Close() }()
-
-	gz := gzip.NewWriter(out)
-	tw := tar.NewWriter(gz)
-
-	if err := addToTar(tw, a.Name, a.Path, 0o755); err != nil {
-		return err
-	}
-	if _, statErr := os.Stat(readmePath); statErr == nil {
-		if err := addToTar(tw, readmeName, readmePath, 0o644); err != nil {
-			return err
-		}
-	}
-	if err := tw.Close(); err != nil {
-		return fmt.Errorf("写入压缩包失败: %w", err)
-	}
-	if err := gz.Close(); err != nil {
-		return fmt.Errorf("写入压缩包失败: %w", err)
-	}
-	return nil
-}
-
-// addToTar copies one file into the tar writer.
-func addToTar(tw *tar.Writer, name, path string, mode int64) error {
-	src, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("读取 %s 失败: %w", path, err)
-	}
-	defer func() { _ = src.Close() }()
-	info, err := src.Stat()
-	if err != nil {
-		return fmt.Errorf("读取 %s 信息失败: %w", path, err)
-	}
-	header := &tar.Header{
-		Name:    name,
-		Mode:    mode,
-		Size:    info.Size(),
-		ModTime: info.ModTime(),
-	}
-	if err := tw.WriteHeader(header); err != nil {
-		return fmt.Errorf("写入压缩包失败: %w", err)
-	}
-	if _, err := io.Copy(tw, src); err != nil {
-		return fmt.Errorf("写入压缩包失败: %w", err)
-	}
-	return nil
-}
-
-// safeFileName replaces characters that are unsafe in archive names.
-func safeFileName(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case '\\', '/', ':', '*', '?', '"', '<', '>', '|', ' ', '\t':
-			return '_'
-		}
-		return r
-	}, s)
-}
-
-// ---------------------------------------------------------------------------
-// metadata files
-
-// writeBuildInfo writes BUILD-INFO.txt.
-func writeBuildInfo(path string, meta *buildMeta, artifacts []artifact, archives []string) error {
-	var b strings.Builder
-	fmt.Fprintf(&b, "yhchat-tui release build\n")
-	fmt.Fprintf(&b, "version : %s\n", meta.Version)
-	fmt.Fprintf(&b, "commit  : %s%s\n", meta.Commit, dirtySuffix(meta.Dirty))
-	fmt.Fprintf(&b, "built   : %s\n", meta.BuildTime)
-	fmt.Fprintf(&b, "go      : %s\n", meta.GoVersion)
-	fmt.Fprintf(&b, "module  : %s\n", meta.Module)
-	fmt.Fprintf(&b, "\ntargets:\n")
-	for _, a := range artifacts {
-		fmt.Fprintf(&b, "  %-8s %-6s %s  (%d bytes)\n", a.OS, a.Arch, a.Name, a.Size)
-	}
-	if len(archives) > 0 {
-		fmt.Fprintf(&b, "\narchives:\n")
-		for _, name := range archives {
-			fmt.Fprintf(&b, "  %s\n", name)
-		}
-	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
-		return fmt.Errorf("写入构建信息失败: %w", err)
-	}
-	return nil
-}
-
-// writeChecksums writes SHA256SUMS.txt for every artifact except the metadata
-// files themselves.
-func writeChecksums(outDir, sumPath string) error {
-	entries, err := os.ReadDir(outDir)
-	if err != nil {
-		return fmt.Errorf("读取输出目录失败: %w", err)
-	}
-	var names []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if name == "SHA256SUMS.txt" || name == "BUILD-INFO.txt" {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	var b strings.Builder
-	for _, name := range names {
-		hash, hashErr := fileSHA256(filepath.Join(outDir, name))
-		if hashErr != nil {
-			return hashErr
-		}
-		fmt.Fprintf(&b, "%s  %s\n", hash, name)
-	}
-	if err := os.WriteFile(sumPath, []byte(b.String()), 0o644); err != nil {
-		return fmt.Errorf("写入校验和失败: %w", err)
-	}
-	return nil
-}
-
-// fileSHA256 returns the lowercase hex SHA-256 of a file.
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("读取 %s 失败: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("计算校验和失败: %w", err)
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// ---------------------------------------------------------------------------
 // helpers
 
 // step prints a centered section header.
@@ -775,19 +516,16 @@ func dirtySuffix(dirty bool) string {
 	return ""
 }
 
-// printSummary prints the final table.
-func printSummary(artifacts []artifact, archives []string, sumPath, infoPath string) {
+// printSummary prints the final table of compiled binaries.
+func printSummary(artifacts []artifact, outDir string) {
 	step("构建完成")
-	fmt.Printf("    %-12s %-36s %s\n", "目标", "文件", "大小")
+	fmt.Printf("    %-14s %-38s %s\n", "目标", "文件", "大小")
+	var total int64
 	for _, a := range artifacts {
-		fmt.Printf("    %-12s %-36s %.2f MB\n",
+		fmt.Printf("    %-14s %-38s %.2f MB\n",
 			a.OS+"/"+a.Arch, a.Name, float64(a.Size)/(1024*1024))
+		total += a.Size
 	}
-	if len(archives) > 0 {
-		fmt.Printf("\n压缩包:\n")
-		for _, name := range archives {
-			fmt.Printf("  %s\n", name)
-		}
-	}
-	fmt.Printf("\n校验和: %s\n构建信息: %s\n", sumPath, infoPath)
+	fmt.Printf("\n共 %d 个可执行文件，合计 %.2f MB\n输出目录: %s\n",
+		len(artifacts), float64(total)/(1024*1024), outDir)
 }
