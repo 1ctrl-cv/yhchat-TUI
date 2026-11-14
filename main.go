@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -37,6 +38,9 @@ func main() {
 
 	if *showVersion {
 		fmt.Printf("yhchat-tui %s\n", tui.Version)
+		fmt.Printf("  commit: %s\n", tui.Commit)
+		fmt.Printf("  built:  %s\n", tui.BuildTime)
+		fmt.Printf("  go:     %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		return
 	}
 

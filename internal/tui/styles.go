@@ -6,9 +6,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Version is the application version shown in the UI and by -version.
-const Version = "0.1.0"
-
 // Palette uses adaptive colors so the UI is readable on both dark and light
 // terminals.
 var (

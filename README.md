@@ -36,22 +36,60 @@
 
 ## 构建
 
-```bash
-# 当前平台
-go build -o yhchat-tui .
+### 全量构建（推荐）
 
-# Windows PowerShell 一键交叉编译 4 个目标到 dist\
+一条命令完成：代码检查（gofmt / go vet）→ 测试 → Windows / Linux 全架构交叉编译 → 注入版本信息 → 打包 → 校验和。
+
+```powershell
+# Windows（PowerShell 7 或 Windows PowerShell 5.1）
 pwsh -File scripts\build.ps1
 ```
 
-产物：
+```bash
+# Linux / macOS / Git Bash
+./scripts/build.sh
+```
 
-| 平台 | 文件 |
+两个入口只是薄封装，真正的构建逻辑在跨平台的 Go 构建器 [`tools/build`](tools/build/main.go) 中，
+因此 Windows 与 Linux 产物完全一致，且不依赖外部 `zip` / `tar` / `sha256sum` 工具。
+
+常用参数（两个脚本一致，用 `-help` 查看全部）：
+
+| 参数 | 说明 |
 | --- | --- |
-| Windows amd64 | `dist/yhchat-tui-windows-amd64.exe` |
-| Windows arm64 | `dist/yhchat-tui-windows-arm64.exe` |
-| Linux amd64 | `dist/yhchat-tui-linux-amd64` |
-| Linux arm64 | `dist/yhchat-tui-linux-arm64` |
+| `-version <版本>` | 指定版本号（默认取 git tag，否则 `0.1.0-dev+<commit>`） |
+| `-out <目录>` | 输出目录（默认仓库下 `dist/`） |
+| `-targets <列表>` | 目标列表，逗号分隔，如 `windows/amd64,linux/amd64` |
+| `-skip-checks` | 跳过 gofmt / go vet |
+| `-skip-tests` | 跳过 go test |
+| `-no-archive` | 只生成可执行文件，不打包 |
+| `-no-clean` | 构建前不清空输出目录 |
+
+默认目标（9 个）：
+
+| 系统 | 架构 |
+| --- | --- |
+| Windows | 386、amd64、arm64 |
+| Linux | 386、amd64、arm(v7)、arm64、loong64、riscv64 |
+
+产物示例（`dist/`）：
+
+```
+dist/
+├── yhchat-tui-windows-386.exe / -amd64.exe / -arm64.exe
+├── yhchat-tui-linux-386 / -amd64 / -arm / -arm64 / -loong64 / -riscv64
+├── yhchat-tui-<版本>-windows-amd64.zip          # 每个平台的 release 包（含 README）
+├── yhchat-tui-<版本>-linux-amd64.tar.gz
+├── SHA256SUMS.txt                               # 所有产物的 SHA-256
+└── BUILD-INFO.txt                               # 版本 / commit / 构建时间 / 目标清单
+```
+
+### 单平台构建
+
+```bash
+go build -o yhchat-tui .
+yhchat-tui -version      # 单独构建显示 0.1.0-dev，全量构建会注入实际版本信息
+```
 
 ## 运行
 
@@ -138,9 +176,11 @@ internal/tui/              登录页、账号主页、根模型、样式
 internal/captchaimg/       图形验证码 → 终端 ANSI 半块字符渲染
 internal/captchaimg/testdata/captcha.png   真实验证码测试图
 tools/mockapi/             本地 mock API（演示 / 联调 / 测试）
+tools/build/               跨平台全量构建器（检查、测试、交叉编译、打包、校验和）
 docs/API_NOTES.md          本项目实际调用的 API 实测记录
 docs/VERIFICATION.md       独立验收报告（构建 / API 契约 / 安全 / TUI 检查，结论 PASS）
-scripts/build.ps1          交叉编译脚本
+scripts/build.ps1          全量构建入口（Windows / PowerShell）
+scripts/build.sh           全量构建入口（Linux / macOS / Git Bash）
 scripts/env.ps1            沙箱开发环境变量（仅开发会话需要）
 vendor/                    依赖（离线构建）
 ```
