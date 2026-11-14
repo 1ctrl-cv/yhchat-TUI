@@ -162,3 +162,42 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 `info=1`（`WsInfo{seq=1,cmd=2}`）+ `data=2`（`google.protobuf.Any`）；按 `info.cmd`
 （`push_message` / `edit_message` / `recalled` / `heartbeat_ack` …）解析 Any 的
 `value` 字段即可（`type_url` 不可靠，建议按 cmd 分发）。
+
+## 通讯录（好友 / 群聊 / 机器人）
+
+### POST /v1/friend/address-book-list —— 获取通讯录
+
+- 请求头 `token`；请求体 protobuf `AddressBookListRequest { string md5 = 2; }`（空 md5 也要编码，服务端返回全量）。
+- 响应 protobuf `AddressBookListResponse`：`status=1`、`data=2`（repeated Data）、`md5=3`。
+  - Data 字段：`list_name=1`（"用户"/"我加入的群聊"/"机器人"）、`data=2`（repeated DataList）、`chat_type=3`。
+  - DataList 字段：`chat_id=1`、`remark=2`、`avatar_url=3`、`permisson_level=4`（群主 100 / 管理员 2，少一个 i 是上游拼写）、
+    `no_disturb=5`、`name=8`。
+- 实测（无效 token）：HTTP 200 protobuf `Status{code=2,...}`；不带 token 头为 JSON `{"code":-101}`。
+
+### POST /v1/friend/request-list —— 申请 / 邀请列表
+
+- 请求头 `token`，无请求字段（发送空 protobuf body）。
+- 响应 protobuf `RequestListResponse`：`status=1`、`requests=2`（repeated Request）、`total=3`、`pending=4`。
+  Request 字段：`receiver_name=1`、`receiver_avatar=2`、`name=3`、`avatar=4`、`group_name=5`、`group_avatar=6`、
+  `inviter_id=7`（文档称 8 同义，实测未知）、`source_type=9`、`target_type=10`、`target_id=11`、`receiver_id=12`、
+  `result=13`、`processed_at=14`、`invite_at=16`、`invite_at_str=17`、`request_id=18`、`bot_name=19`、`bot_avatar=20`、
+  `processor_name=22`、`note=23`、`is_vip=24`。
+
+## 社区（分区 / 文章）—— JSON 接口
+
+以下接口均为 `POST` + 请求头 `token`，请求/响应 JSON，统一 `{code,msg,data}`；`code!=1` 时按 APIError 处理。
+
+- **分区列表** `POST /v1/community/ba/following-ba-list`：请求 `{typ,size,page}`（typ：1 关注 / 2 热门 / 3 我的 / 4 全部）；响应 `data.ba[]`（id/name/avatar/memberNum/postNum/groupNum/createTimeText/isFollowed）与 `data.total`。
+- **分区信息** `POST /v1/community/ba/info`：请求 `{id}`；响应 `data.ba`（同上，`isFollowed` 为 "1"/"0"）。
+- **文章列表** `POST /v1/community/posts/post-list`：请求 `{typ:1, baId, size, page}`；响应 `data.posts[]`（id/baId/senderId/title/contentType/Content/createTime/…/isSticky/isLiked）与 `data.total`。
+- **文章详情** `POST /v1/community/posts/post-detail`：请求 `{id}`；响应 `data.ba`、`data.isAdmin`、`data.post`（含 content/作者/点赞/评论/收藏等）。
+- **评论列表** `POST /v1/community/comment/comment-list`：请求 `{postId,size,page}`；响应 `data.comments[]` 与 `data.total`。
+- 注意：`isLiked`/`isFollowed` 在文档中同时出现字符串与数字两种形态，客户端解码做了兼容。
+
+## 个人资料 / 账号操作
+
+- **修改昵称** `POST /v1/user/edit-nickname`：protobuf `EditNicknameRequest{name=3}` → `StatusResponse`。
+- **修改头像** `POST /v1/user/edit-avatar`：protobuf `EditAvatarRequest{url=2}` → `StatusResponse`。
+- **获取个人资料** `POST /v1/user/get-user-data`：JSON，响应 `data.data`（userId/introduction/gender/birthday/province/city/district/locationCode/lastLoginTime/update_time）。
+- **保存个人资料** `POST /v1/user/save-user-data`：JSON（当前 TUI 只读展示，接口已封装）。
+- **添加好友/群/机器人** `POST /v1/friend/apply`：JSON `{chatId,chatType,remark}`（chatType 1/2/3）。

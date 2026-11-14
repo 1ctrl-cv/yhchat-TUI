@@ -8,8 +8,8 @@
 
 当前里程碑：
 
-- **已完成**：登录（邮箱密码 / 短信验证码 + 终端内图片验证码渲染）、自动登录、主窗口（侧边栏 + 会话搜索 + 会话列表 + 消息历史 + 发送文本）、账号信息页、退出登录、全量构建脚本。
-- **下一阶段**：WebSocket 实时消息（`wss://chat-ws-go.jwzhd.com/ws`）、更多消息类型、历史分页。
+- **已完成**：登录（邮箱密码 / 短信验证码 + 终端内图片验证码渲染）、自动登录、主窗口（侧边栏 + 会话搜索 + 会话列表 + 消息历史 + 发送文本）、通讯录（好友/群/机器人分组 + 详情）、社区（分区/文章列表/文章详情/Markdown 渲染/评论）、我的页面（修改昵称/头像、个人资料、添加好友申请、设置/关于等）、退出登录、全量构建脚本。
+- **下一阶段**：WebSocket 实时消息（`wss://chat-ws-go.jwzhd.com/ws`）、社区互动（发文章/评论/点赞）、通讯录申请处理、创建群聊/机器人、更多消息类型与历史分页。
 
 API 依据公开文档仓库 [`../yhchatAPI`](../yhchatAPI) 实现；本仓库的实际调用/实测记录见 [`docs/API_NOTES.md`](docs/API_NOTES.md)。
 
@@ -44,9 +44,10 @@ $env:UPDATE_SNAPSHOTS="1"; go test ./internal/tui -run TestViewSnapshots -count=
 
 ```
 main.go                      入口：flag 解析 + tea 程序启动
-internal/api/                HTTP 客户端：登录、会话列表、消息历史、发送（protobuf）
+internal/api/                HTTP 客户端：登录、会话/消息、通讯录、社区、个人资料（protobuf + JSON）
 internal/config/             token / 设备 ID 持久化（`~/.yhchat-tui/config.json`）
-internal/tui/                所有界面：app 根模型、登录页、主窗口、账号页、样式、快照测试
+internal/tui/                所有界面：app 根模型、登录页、聊天（mainwindow）、通讯录（contacts）、
+                             社区（community）、我的（home）、共享侧边栏（shell）、样式、快照测试
 internal/captchaimg/         图形验证码 → ANSI 半块字符渲染（含真实图片 fixture）
 tools/build/                 跨平台全量构建器（被 scripts/build.* 调用）
 docs/API_NOTES.md            实际调用的 API 实测记录（协议字段、实测响应）
@@ -63,6 +64,7 @@ vendor/                      依赖（提交进仓库，离线构建）
   所有行宽高必须铺满终端；新增界面需在 `TestViewFitsTerminal` 的尺寸集合下通过。
 - 样式集中在 `internal/tui/styles.go`，不要在 View 里重复内联颜色。
 - **Bubble Tea textinput 的 placeholder 必须是 ASCII**：CJK placeholder 会触发 upstream 渲染 NUL 字节的 bug。
+- 页面统一通过 `internal/tui/shell.go` 的 `renderSidebar` 渲染侧边栏，通过 `switchSectionMsg` 切换页面；新增页面需同时更新 App 的 screen/路由/View 与 `TestViewFitsTerminal`。
 - 时间格式必须使用 `timeNow` / `timeLocation`（`internal/tui/mainwindow.go`），测试会冻结时间保证快照确定性。
 - 新增/修改 API 调用时：同步更新 `docs/API_NOTES.md`，并在 `internal/api/*_test.go` 加 protobuf fixture 测试。
 - 不要修改 `internal/api/proto.go` 中已验证的 UserInfo 解码语义（字段号/类型以 `../yhchatAPI/src/full.proto` 为准）。
@@ -91,5 +93,6 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 上游 API 文档：`../yhchatAPI/src/api/v1/*.md`、`../yhchatAPI/src/full.proto`、`../yhchatAPI/src/api/wss/`
 - 本项目 API 实测记录：[`docs/API_NOTES.md`](docs/API_NOTES.md)
 - 登录里程碑独立验收报告：[`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+
 
 
