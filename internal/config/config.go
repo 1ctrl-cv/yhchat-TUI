@@ -89,7 +89,11 @@ func Load(path string) (*Store, error) {
 		}
 		s.Data.DeviceID = id
 		if saveErr := s.Save(); saveErr != nil {
-			return nil, saveErr
+			// The app can still run with an in-memory device id; only
+			// persistence is broken (e.g. read-only config directory).
+			if warn == nil {
+				warn = fmt.Errorf("登录状态将无法保存: %w", saveErr)
+			}
 		}
 	}
 	return s, warn

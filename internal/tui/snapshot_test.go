@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -30,8 +31,9 @@ func (s *snapshotter) check(name, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		s.t.Fatalf("mkdir snapshots: %v", err)
 	}
+	got := content + "\n"
 	if s.update {
-		if err := os.WriteFile(path, []byte(content+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
 			s.t.Fatalf("write snapshot %s: %v", name, err)
 		}
 		return
@@ -40,13 +42,16 @@ func (s *snapshotter) check(name, content string) {
 	if err != nil {
 		// First run: create the snapshot so it can be reviewed and committed.
 		s.t.Logf("snapshot %s created (%d bytes)", name, len(content))
-		if writeErr := os.WriteFile(path, []byte(content+"\n"), 0o644); writeErr != nil {
+		if writeErr := os.WriteFile(path, []byte(got), 0o644); writeErr != nil {
 			s.t.Fatalf("create snapshot %s: %v", name, writeErr)
 		}
 		return
 	}
-	if string(want) != content+"\n" {
-		s.t.Errorf("snapshot %s mismatch\n--- want ---\n%s\n--- got ---\n%s", name, want, content)
+	// Normalize CRLF so a Windows checkout with core.autocrlf=true still
+	// compares equal (see .gitattributes).
+	wantText := strings.ReplaceAll(string(want), "\r\n", "\n")
+	if wantText != got {
+		s.t.Errorf("snapshot %s mismatch\n--- want ---\n%s\n--- got ---\n%s", name, wantText, got)
 	}
 }
 

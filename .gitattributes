@@ -1,0 +1,6 @@
+# Normalize line endings so Windows checkouts (core.autocrlf=true) do not
+# corrupt test snapshots or Go sources.
+* text=auto eol=lf
+*.png binary
+*.exe binary
+*.gif binary

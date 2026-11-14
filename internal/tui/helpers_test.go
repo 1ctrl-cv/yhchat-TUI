@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 	"google.golang.org/protobuf/encoding/protowire"
 
@@ -32,9 +32,12 @@ const (
 	testVIPExpires = int64(1893456000) // 2030-01-01
 )
 
-// TestMain forces a plain terminal profile so views are deterministic and
-// comparable as text snapshots.
+// TestMain forces a plain, colorless terminal profile so views are
+// deterministic and comparable as text snapshots regardless of the ambient
+// NO_COLOR/TERM settings of the machine running the tests.
 func TestMain(m *testing.M) {
+	os.Setenv("NO_COLOR", "1")
+	os.Setenv("TERM", "dumb")
 	lipgloss.SetColorProfile(termenv.Ascii)
 	os.Exit(m.Run())
 }

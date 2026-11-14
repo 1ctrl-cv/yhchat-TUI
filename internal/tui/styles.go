@@ -12,15 +12,15 @@ const Version = "0.1.0"
 // Palette uses adaptive colors so the UI is readable on both dark and light
 // terminals.
 var (
-	colorAccent  = lipgloss.AdaptiveColor{Light: "#5B4BD6", Dark: "#9D8CFF"}
-	colorCyan    = lipgloss.AdaptiveColor{Light: "#0E7490", Dark: "#22D3EE"}
-	colorText    = lipgloss.AdaptiveColor{Light: "#1F2328", Dark: "#E6EDF3"}
-	colorMuted   = lipgloss.AdaptiveColor{Light: "#6E7781", Dark: "#8B949E"}
-	colorBorder  = lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#30363D"}
-	colorInputBg = lipgloss.AdaptiveColor{Light: "#F0F2F5", Dark: "#1B2230"}
-	colorSuccess = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
-	colorError   = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#F85149"}
-	colorWarn    = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D29922"}
+	colorAccent   = lipgloss.AdaptiveColor{Light: "#5B4BD6", Dark: "#9D8CFF"}
+	colorCyan     = lipgloss.AdaptiveColor{Light: "#0E7490", Dark: "#22D3EE"}
+	colorText     = lipgloss.AdaptiveColor{Light: "#1F2328", Dark: "#E6EDF3"}
+	colorMuted    = lipgloss.AdaptiveColor{Light: "#6E7781", Dark: "#8B949E"}
+	colorBorder   = lipgloss.AdaptiveColor{Light: "#D0D7DE", Dark: "#30363D"}
+	colorInputBg  = lipgloss.AdaptiveColor{Light: "#F0F2F5", Dark: "#1B2230"}
+	colorSuccess  = lipgloss.AdaptiveColor{Light: "#1A7F37", Dark: "#3FB950"}
+	colorError    = lipgloss.AdaptiveColor{Light: "#CF222E", Dark: "#F85149"}
+	colorWarn     = lipgloss.AdaptiveColor{Light: "#9A6700", Dark: "#D29922"}
 	colorOnAccent = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#0D1117"}
 )
 

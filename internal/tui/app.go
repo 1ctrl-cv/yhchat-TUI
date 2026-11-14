@@ -163,7 +163,9 @@ func (a *App) handleAutoLogin(msg autoLoginMsg) (tea.Model, tea.Cmd) {
 	notice := "无法验证登录状态：" + api.FriendlyMessage(msg.err)
 	if api.IsSessionExpired(msg.err) || msg.err == nil {
 		notice = "登录已过期，请重新登录"
-		_ = a.store.ClearToken()
+		if clearErr := a.store.ClearToken(); clearErr != nil {
+			notice += "（本地登录状态清除失败）"
+		}
 	}
 	cmd := a.resetLogin(notice)
 	return a, cmd
@@ -202,9 +204,12 @@ func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 
 // handleLogoutDone clears the token and returns to the login screen.
 func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
-	_ = a.store.ClearToken()
+	clearErr := a.store.ClearToken()
 	notice := "已退出登录"
-	if msg.err != nil && !api.IsSessionExpired(msg.err) {
+	switch {
+	case clearErr != nil:
+		notice = "已退出登录，但清除本地登录状态失败: " + clearErr.Error()
+	case msg.err != nil && !api.IsSessionExpired(msg.err):
 		notice = "已退出登录（服务器注销请求失败）"
 	}
 	return a.resetLogin(notice)
@@ -212,8 +217,11 @@ func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
 
 // handleExpired drops an expired token and returns to login.
 func (a *App) handleExpired() tea.Cmd {
-	_ = a.store.ClearToken()
-	return a.resetLogin("登录已过期，请重新登录")
+	notice := "登录已过期，请重新登录"
+	if clearErr := a.store.ClearToken(); clearErr != nil {
+		notice += "（本地登录状态清除失败）"
+	}
+	return a.resetLogin(notice)
 }
 
 // resetLogin rebuilds the login screen with an optional notice.
