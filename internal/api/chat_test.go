@@ -191,8 +191,10 @@ func TestConversations(t *testing.T) {
 			t.Errorf("token header = %q", r.Header.Get("token"))
 		}
 		body, _ := io.ReadAll(r.Body)
-		if len(body) == 0 {
-			t.Error("empty protobuf request body")
+		// A full sync must not send the md5 field; the server would treat any
+		// present md5 as "client is up to date" and return an empty list.
+		if len(body) != 0 {
+			t.Errorf("conversation list request body = %x, want empty", body)
 		}
 		w.Header().Set("Content-Type", "application/x-protobuf")
 		_, _ = w.Write(testConversationListResponse())
@@ -506,3 +508,61 @@ func TestSortMessagesChronologically(t *testing.T) {
 
 // keep time import used if future fixtures need timestamps
 var _ = time.Now
+
+func TestRecallMessages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/msg/recall-msg" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if got := string(parseRequestFieldBytes(t, body, 3)); got != "2002" {
+			t.Errorf("chat id = %q", got)
+		}
+		var ids []string
+		rest := body
+		for len(rest) > 0 {
+			num, typ, n := protowire.ConsumeTag(rest)
+			if n < 0 {
+				break
+			}
+			rest = rest[n:]
+			if typ == protowire.BytesType {
+				value, m := protowire.ConsumeBytes(rest)
+				if m < 0 {
+					break
+				}
+				if num == 2 {
+					ids = append(ids, string(value))
+				}
+				rest = rest[m:]
+				continue
+			}
+			m := protowire.ConsumeFieldValue(num, typ, rest)
+			if m < 0 {
+				break
+			}
+			rest = rest[m:]
+		}
+		if len(ids) != 2 || ids[0] != "msg-a" || ids[1] != "msg-b" {
+			t.Errorf("msg ids = %v", ids)
+		}
+		if got := parseRequestFieldVarint(t, body, 4); got != 2 {
+			t.Errorf("chat type = %d", got)
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(testStatusResponse(1, "success"))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t)
+	client.BaseURL = srv.URL
+	if err := client.RecallMessages(context.Background(), "tok-1", "2002", ChatTypeGroup, "msg-a", "msg-b"); err != nil {
+		t.Fatalf("RecallMessages: %v", err)
+	}
+	if err := client.RecallMessages(context.Background(), "tok-1", "", ChatTypeGroup, "msg-a"); err == nil {
+		t.Fatal("expected error for empty chat id")
+	}
+	if err := client.RecallMessages(context.Background(), "tok-1", "2002", ChatTypeGroup); err == nil {
+		t.Fatal("expected error for empty msg ids")
+	}
+}

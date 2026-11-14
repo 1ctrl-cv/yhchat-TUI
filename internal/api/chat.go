@@ -107,6 +107,34 @@ func (c *Client) DismissNotification(ctx context.Context, token, chatID string) 
 	return err
 }
 
+// RecallMessages recalls one or more messages sent by the current account.
+//
+// Endpoint: POST /v1/msg/recall-msg (protobuf RecallMsg).
+func (c *Client) RecallMessages(ctx context.Context, token, chatID string, chatType ChatType, msgIDs ...string) error {
+	if strings.TrimSpace(chatID) == "" {
+		return fmt.Errorf("会话 ID 不能为空")
+	}
+	if len(msgIDs) == 0 {
+		return fmt.Errorf("消息 ID 不能为空")
+	}
+	if chatType == ChatTypeUnknown {
+		chatType = ChatTypeUser
+	}
+	body := encodeRecallMsgRequest(chatID, chatType, msgIDs)
+	raw, err := c.postProto(ctx, "/v1/msg/recall-msg", token, body)
+	if err != nil {
+		return err
+	}
+	status, err := decodeStatusResponse(raw)
+	if err != nil {
+		return fmt.Errorf("解析撤回结果失败: %w", err)
+	}
+	if status.Code != 1 {
+		return &APIError{Code: int(status.Code), Msg: status.Msg}
+	}
+	return nil
+}
+
 // newMessageID returns a random 32 hex character message id, matching the
 // uuid4().hex values the official clients send.
 func newMessageID() (string, error) {

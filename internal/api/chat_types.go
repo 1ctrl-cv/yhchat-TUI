@@ -108,6 +108,10 @@ type MessageContent struct {
 	MentionedIDs   []string
 	StickerItemID  int64
 	StickerPackID  int64
+	Width          int32
+	Height         int32
+	CallStatus     string
+	RoomName       string
 }
 
 // Message is one chat message.

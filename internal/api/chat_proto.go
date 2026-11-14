@@ -63,6 +63,10 @@ const (
 	contentVideoTimeFld   = 20
 	contentAudioURLField  = 21
 	contentAudioTimeFld   = 22
+	contentRoomNameFld    = 29
+	contentCallStatusFld  = 32
+	contentWidthFld       = 33
+	contentHeightFld      = 34
 	contentStickerItemFld = 25
 	contentStickerPackFld = 26
 	contentTipField       = 37
@@ -91,8 +95,27 @@ func pbAppendVarint(b []byte, field protowire.Number, value uint64) []byte {
 }
 
 // encodeConversationListRequest encodes ConversationListRequest{md5=2}.
+// encodeConversationListRequest encodes ConversationListRequest{md5=2}.
+// The real server treats a present md5 field (even an empty one) as an
+// incremental sync request and returns an empty list, so an empty md5 means
+// "full sync" and the whole body is omitted.
 func encodeConversationListRequest(md5 string) []byte {
+	if md5 == "" {
+		return nil
+	}
 	return pbAppendString(nil, 2, md5)
+}
+
+// encodeRecallMsgRequest encodes RecallMsg{msg_id=2 repeated, chat_id=3,
+// chat_type=4}.
+func encodeRecallMsgRequest(chatID string, chatType ChatType, msgIDs []string) []byte {
+	var b []byte
+	for _, msgID := range msgIDs {
+		b = pbAppendString(b, 2, msgID)
+	}
+	b = pbAppendString(b, 3, chatID)
+	b = pbAppendVarint(b, 4, uint64(chatType))
+	return b
 }
 
 // encodeListMsgRequest encodes ListMsgRequest{msg_count=2, msg_id=3,
@@ -753,6 +776,42 @@ func decodeMessageContent(b []byte) (MessageContent, error) {
 			b = rest
 			if ok {
 				content.AudioTime = int32(value)
+			}
+		case contentRoomNameFld:
+			value, rest, ok, err := consumeBytesField(num, typ, b)
+			if err != nil {
+				return content, fmt.Errorf("room_name: %w", err)
+			}
+			b = rest
+			if ok {
+				content.RoomName = string(value)
+			}
+		case contentCallStatusFld:
+			value, rest, ok, err := consumeBytesField(num, typ, b)
+			if err != nil {
+				return content, fmt.Errorf("call_status_text: %w", err)
+			}
+			b = rest
+			if ok {
+				content.CallStatus = string(value)
+			}
+		case contentWidthFld:
+			value, rest, ok, err := consumeVarintField(num, typ, b)
+			if err != nil {
+				return content, fmt.Errorf("width: %w", err)
+			}
+			b = rest
+			if ok {
+				content.Width = int32(value)
+			}
+		case contentHeightFld:
+			value, rest, ok, err := consumeVarintField(num, typ, b)
+			if err != nil {
+				return content, fmt.Errorf("height: %w", err)
+			}
+			b = rest
+			if ok {
+				content.Height = int32(value)
 			}
 		case contentStickerItemFld:
 			value, rest, ok, err := consumeVarintField(num, typ, b)
