@@ -33,7 +33,6 @@ const (
 	detailUserData
 	detailLogoutConfirm
 	detailSettings
-	detailDocs
 	detailAbout
 	detailPlaceholderCreateGroup
 	detailPlaceholderCreateBot
@@ -57,9 +56,8 @@ var profileMenuItems = []profileMenuItem{
 	{Label: "创建群聊", Detail: detailPlaceholderCreateGroup, Hint: "后续版本支持"},
 	{Label: "创建机器人", Detail: detailPlaceholderCreateBot, Hint: "后续版本支持"},
 	{Label: "机器人控制台", Detail: detailPlaceholderBotConsole, Hint: "后续版本支持"},
-	{Label: "开发文档", Detail: detailDocs, Hint: "API / WebSocket 文档入口"},
 	{Label: "设置", Detail: detailSettings, Hint: "配置文件与登录状态"},
-	{Label: "关于我们", Detail: detailAbout, Hint: "版本与项目信息"},
+	{Label: "关于", Detail: detailAbout, Hint: "作者与项目信息"},
 	{Label: "退出登录", Detail: detailLogoutConfirm, Hint: "清除本地 token"},
 }
 
@@ -96,6 +94,10 @@ type homeModel struct {
 	// form state (nickname / avatar / add-friend)
 	fields     []textinput.Model
 	fieldFocus int
+
+	// add-friend dialog state
+	addFriendType      int  // 0 user, 1 group, 2 bot
+	addFriendTabsFocus bool // focus is on the type tabs
 
 	userData *api.UserData
 
@@ -263,6 +265,8 @@ func (m homeModel) Update(msg tea.Msg) (homeModel, tea.Cmd) {
 		m.detail = detailEmpty
 		m.fields = nil
 		m.focus = profileMenu
+		m.addFriendTabsFocus = false
+		m.addFriendType = 0
 		return m, nil
 
 	default:
@@ -282,6 +286,14 @@ func (m homeModel) Update(msg tea.Msg) (homeModel, tea.Cmd) {
 func (m homeModel) handleKey(msg tea.KeyMsg) (homeModel, tea.Cmd) {
 	key := msg.String()
 
+	if m.focus == profileDetail && m.detail != detailEmpty && len(m.fields) > 0 {
+		switch key {
+		case "tab":
+			return m.cycleFormFocus(1)
+		case "shift+tab":
+			return m.cycleFormFocus(-1)
+		}
+	}
 	switch key {
 	case "tab":
 		return m.handleTab()
@@ -371,11 +383,30 @@ func (m homeModel) handleMenuKey(key string) (homeModel, tea.Cmd) {
 func (m homeModel) handleDetailKey(key string, msg tea.KeyMsg) (homeModel, tea.Cmd) {
 	// Form mode: text inputs receive typing.
 	if len(m.fields) > 0 {
+		if m.detail == detailFormAddFriend && m.addFriendTabsFocus {
+			switch key {
+			case "left", "up":
+				m.setAddFriendType(m.addFriendType - 1)
+			case "right", "down":
+				m.setAddFriendType(m.addFriendType + 1)
+			case "enter":
+				m.addFriendTabsFocus = false
+				m.fieldFocus = 0
+				return m, m.applyFieldFocus()
+			case "esc":
+				m.fields = nil
+				m.detail = detailEmpty
+				m.focus = profileMenu
+				m.addFriendTabsFocus = false
+			}
+			return m, nil
+		}
 		switch key {
 		case "esc":
 			m.fields = nil
 			m.detail = detailEmpty
 			m.focus = profileMenu
+			m.addFriendTabsFocus = false
 			return m, nil
 		case "enter":
 			return m.submitForm()
@@ -468,11 +499,13 @@ func (m homeModel) openDetail() (homeModel, tea.Cmd) {
 		m.initFields([]fieldSpec{{Placeholder: "https://.../avatar.png"}})
 		return m, m.applyFieldFocus()
 	case detailFormAddFriend:
+		m.addFriendType = 0
+		m.addFriendTabsFocus = false
 		m.initFields([]fieldSpec{
-			{Placeholder: "1=user 2=group 3=bot"},
-			{Placeholder: "chat id"},
-			{Placeholder: "request note（可选）"},
+			{Placeholder: "user id"},
+			{Placeholder: "verification message"},
 		})
+		m.setAddFriendIDPlaceholder()
 		return m, m.applyFieldFocus()
 	}
 	return m, nil
@@ -507,13 +540,52 @@ func (m homeModel) currentFieldIndex() int {
 func (m *homeModel) applyFieldFocus() tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(m.fields))
 	for i := range m.fields {
-		if i == m.fieldFocus {
+		if !m.addFriendTabsFocus && i == m.fieldFocus {
 			cmds = append(cmds, m.fields[i].Focus())
 		} else {
 			m.fields[i].Blur()
 		}
 	}
 	return tea.Batch(cmds...)
+}
+
+// cycleFormFocus moves the focus inside an open form.
+func (m homeModel) cycleFormFocus(delta int) (homeModel, tea.Cmd) {
+	if m.detail != detailFormAddFriend {
+		if len(m.fields) == 0 {
+			return m, nil
+		}
+		n := len(m.fields)
+		m.fieldFocus = ((m.fieldFocus+delta)%n + n) % n
+		return m, m.applyFieldFocus()
+	}
+	// Add-friend dialog slots: 0 = type tabs, 1 = ID, 2 = verification message.
+	slot := 1 + m.fieldFocus
+	if m.addFriendTabsFocus {
+		slot = 0
+	}
+	slot = ((slot+delta)%3 + 3) % 3
+	m.addFriendTabsFocus = slot == 0
+	m.fieldFocus = 0
+	if slot > 0 {
+		m.fieldFocus = slot - 1
+	}
+	return m, m.applyFieldFocus()
+}
+
+// setAddFriendType switches the add-friend target type (0 user / 1 group / 2 bot).
+func (m *homeModel) setAddFriendType(value int) {
+	m.addFriendType = clamp(value, 0, 2)
+	m.setAddFriendIDPlaceholder()
+}
+
+// setAddFriendIDPlaceholder updates the ID input placeholder for the type.
+func (m *homeModel) setAddFriendIDPlaceholder() {
+	if len(m.fields) == 0 {
+		return
+	}
+	placeholders := []string{"user id", "group id", "bot id"}
+	m.fields[0].Placeholder = placeholders[clamp(m.addFriendType, 0, len(placeholders)-1)]
 }
 
 // submitForm validates and submits the current form.
@@ -542,27 +614,15 @@ func (m homeModel) submitForm() (homeModel, tea.Cmd) {
 		}
 		return m, tea.Batch(m.spinner.Tick, editAvatarCmd(m.client, m.token, avatarURL))
 	case detailFormAddFriend:
-		chatTypeRaw := strings.TrimSpace(m.fields[0].Value())
-		chatID := strings.TrimSpace(m.fields[1].Value())
-		remark := strings.TrimSpace(m.fields[2].Value())
+		chatID := strings.TrimSpace(m.fields[0].Value())
+		verifyMessage := strings.TrimSpace(m.fields[1].Value())
 		if chatID == "" {
-			m.errText = "对象 ID 不能为空"
+			m.errText = "请输入 ID"
 			return m, nil
 		}
-		var chatType api.ChatType
-		switch chatTypeRaw {
-		case "1":
-			chatType = api.ChatTypeUser
-		case "2":
-			chatType = api.ChatTypeGroup
-		case "3":
-			chatType = api.ChatTypeBot
-		default:
-			m.errText = "类型必须填写 1（用户）/ 2（群聊）/ 3（机器人）"
-			return m, nil
-		}
+		chatType := []api.ChatType{api.ChatTypeUser, api.ChatTypeGroup, api.ChatTypeBot}[clamp(m.addFriendType, 0, 2)]
 		m.loading = true
-		return m, tea.Batch(m.spinner.Tick, addFriendCmd(m.client, m.token, chatID, chatType, remark))
+		return m, tea.Batch(m.spinner.Tick, addFriendCmd(m.client, m.token, chatID, chatType, verifyMessage))
 	}
 	return m, nil
 }
@@ -785,7 +845,9 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 		for _, row := range rows {
 			lines = append(lines, m.detailRow(width, row[0], row[1]))
 		}
-	case detailFormNickname, detailFormAvatar, detailFormAddFriend:
+	case detailFormAddFriend:
+		return m.addFriendDialog(bodyH, width)
+	case detailFormNickname, detailFormAvatar:
 		lines = append(lines, titleAccentStyle.Render(truncate(m.formTitle(), maxInt(8, width-2))), "")
 		lines = append(lines, hintStyle.Render(truncate("  "+m.formHint(), maxInt(8, width-2))), "")
 		for i, field := range m.fields {
@@ -819,21 +881,10 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 			m.detailRow(width, "版本", Version),
 		)
 		lines = append(lines, hintStyle.Render(truncate("  （配置保存在用户主目录下，0600 权限）", maxInt(8, width-2))))
-	case detailDocs:
-		lines = append(lines, titleAccentStyle.Render("开发文档"), "")
-		for _, line := range []string{
-			"上游云湖 API 文档（本地参考仓库）：",
-			"  ../yhchatAPI/src/api/v1/",
-			"  ../yhchatAPI/src/full.proto",
-			"  ../yhchatAPI/src/api/wss/chat-ws-go.jwzhd.com.md",
-			"本项目 API 实测记录：docs/API_NOTES.md",
-			"WebSocket 实时消息（下一阶段）：",
-			"  wss://chat-ws-go.jwzhd.com/ws",
-		} {
-			lines = append(lines, hintStyle.Render(" "+truncate(line, maxInt(8, width-2))))
-		}
+
 	case detailAbout:
-		lines = append(lines, titleAccentStyle.Render("关于我们"), "")
+		lines = append(lines, titleAccentStyle.Render("关于"), "")
+		lines = append(lines, m.detailRow(width, "作者", "1ctrl-cv"), "")
 		lines = append(lines,
 			m.detailRow(width, "程序", "yhchat-tui"),
 			m.detailRow(width, "版本", Version),
@@ -841,7 +892,8 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 			m.detailRow(width, "commit", Commit),
 			m.detailRow(width, "引擎", "Go + Bubble Tea"),
 		)
-		lines = append(lines, hintStyle.Render(truncate(" 非官方云湖终端客户端，API 依据公开文档实现，仅供学习交流。", maxInt(8, width-2))))
+		lines = append(lines, "")
+		lines = append(lines, hintStyle.Render(truncate(" 项目地址：https://github.com/1ctrl-cv/yhchat-TUI", maxInt(8, width-2))))
 	case detailPlaceholderCreateGroup, detailPlaceholderCreateBot, detailPlaceholderBotConsole:
 		lines = append(lines, titleAccentStyle.Render(truncate(m.placeholderTitle(), maxInt(8, width-2))), "")
 		lines = append(lines, hintStyle.Render(" 该功能将在后续版本实现。"))
@@ -864,6 +916,101 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 	return out
 }
 
+// addFriendDialog renders the centered add-friend dialog.
+func (m homeModel) addFriendDialog(bodyH, width int) []string {
+	boxWidth := clamp(width-4, 30, 58)
+	interior := maxInt(18, boxWidth-6)
+
+	title := lipgloss.PlaceHorizontal(interior, lipgloss.Center,
+		titleAccentStyle.Render("添加好友"))
+	subtitle := lipgloss.PlaceHorizontal(interior, lipgloss.Center,
+		hintStyle.Render("输入用户、群或机器人的 ID"))
+
+	typeLabels := []string{"好友", "群聊", "机器人"}
+	var tabParts []string
+	for i, label := range typeLabels {
+		style := tabInactiveStyle
+		if i == m.addFriendType {
+			style = tabActiveStyle
+		}
+		if len(tabParts) > 0 {
+			tabParts = append(tabParts, " ")
+		}
+		tabParts = append(tabParts, style.Render(label))
+	}
+	tabsLine := lipgloss.JoinHorizontal(lipgloss.Top, tabParts...)
+	if m.addFriendTabsFocus {
+		tabsLine = labelFocusedStyle.Render("‹ ") + tabsLine + labelFocusedStyle.Render(" ›")
+	}
+	tabs := lipgloss.PlaceHorizontal(interior, lipgloss.Center, tabsLine)
+
+	idLabels := []string{"用户 ID", "群聊 ID", "机器人 ID"}
+	idLabel := idLabels[clamp(m.addFriendType, 0, len(idLabels)-1)]
+	verifyLabel := "验证消息"
+
+	renderField := func(index int, label string) []string {
+		field := m.fields[index]
+		field.Width = maxInt(8, interior-6)
+		fieldStyle := lipgloss.NewStyle().
+			Width(maxInt(10, interior-2)).
+			Padding(0, 1).
+			Background(colorInputBg)
+		focused := m.focus == profileDetail && !m.addFriendTabsFocus && m.fieldFocus == index
+		labelStyleToUse := labelStyle
+		prefix := "  "
+		if focused {
+			labelStyleToUse = labelFocusedStyle
+			prefix = "▸ "
+		}
+		out := []string{labelStyleToUse.Render(truncate(prefix+label, interior))}
+		out = append(out, strings.Split(fieldStyle.Render(field.View()), "\n")...)
+		return out
+	}
+
+	content := []string{title, subtitle, "", tabs, ""}
+	content = append(content, renderField(0, idLabel)...)
+	content = append(content, "")
+	content = append(content, renderField(1, verifyLabel)...)
+	content = append(content, "")
+
+	cancel := lipgloss.NewStyle().Foreground(colorMuted).Padding(0, 1).Render("取消")
+	primary := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorOnAccent).
+		Background(colorAccent).
+		Padding(0, 1).
+		Render("发送申请")
+	content = append(content, lipgloss.PlaceHorizontal(interior, lipgloss.Center,
+		lipgloss.JoinHorizontal(lipgloss.Top, cancel, "  ", primary)))
+	if m.loading {
+		content = append(content, lipgloss.PlaceHorizontal(interior, lipgloss.Center,
+			lipgloss.JoinHorizontal(lipgloss.Top, m.spinner.View(), " ", hintStyle.Render("发送中…"))))
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 2).
+		Render(strings.Join(content, "\n"))
+	boxLines := strings.Split(box, "\n")
+
+	top := maxInt(0, (bodyH-len(boxLines))/2)
+	out := make([]string, 0, bodyH)
+	for i := 0; i < top && len(out) < bodyH; i++ {
+		out = append(out, padLine("", width))
+	}
+	for _, line := range boxLines {
+		if len(out) >= bodyH {
+			break
+		}
+		out = append(out, padLine(lipgloss.PlaceHorizontal(width, lipgloss.Center, line), width))
+	}
+	for len(out) < bodyH {
+		out = append(out, padLine("", width))
+	}
+	return out
+}
+
 // detailRow renders a label/value row inside the detail pane.
 func (m homeModel) detailRow(width int, label, value string) string {
 	const labelW = 10
@@ -880,7 +1027,7 @@ func (m homeModel) formTitle() string {
 	case detailFormAvatar:
 		return "修改头像"
 	case detailFormAddFriend:
-		return "添加好友 / 群 / 机器人"
+		return "添加好友"
 	}
 	return ""
 }
@@ -893,7 +1040,7 @@ func (m homeModel) formHint() string {
 	case detailFormAvatar:
 		return "输入新的头像图片 URL（http/https）"
 	case detailFormAddFriend:
-		return "类型填 1/2/3，ID 为对方用户/群聊/机器人 ID"
+		return "输入用户、群或机器人的 ID"
 	}
 	return ""
 }
@@ -906,14 +1053,10 @@ func (m homeModel) formFieldLabel(index int) string {
 	case detailFormAvatar:
 		return "头像 URL"
 	case detailFormAddFriend:
-		switch index {
-		case 0:
-			return "类型"
-		case 1:
-			return "对象 ID"
-		default:
-			return "申请简介"
+		if index == 0 {
+			return "ID"
 		}
+		return "验证消息"
 	}
 	return fmt.Sprintf("字段 %d", index+1)
 }
@@ -937,6 +1080,9 @@ func (m homeModel) viewHints() string {
 		return sidebarHint()
 	case profileDetail:
 		if len(m.fields) > 0 {
+			if m.detail == detailFormAddFriend {
+				return "Tab 切换字段/类型 · ←→ 切换类型 · Enter 发送申请 · Esc 取消"
+			}
 			return "Tab/↑↓ 切换字段 · Enter 提交 · Esc 返回菜单"
 		}
 		return "Enter 确认 · Esc 返回菜单 · Tab 切换焦点"

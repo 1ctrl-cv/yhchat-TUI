@@ -103,6 +103,21 @@ func TestViewSnapshots(t *testing.T) {
 	openHomeScreen(t, app)
 	snap.check("home", app.View())
 
+	// Add-friend dialog (centered) and the about page.
+	for i := 0; i < 3; i++ {
+		sendKey(t, app, tea.KeyDown)
+	}
+	cmd = sendKey(t, app, tea.KeyEnter)
+	applyAll(t, app, cmd)
+	snap.check("profile_addfriend", app.View())
+	sendKey(t, app, tea.KeyEsc)
+	for app.home.menuIndex < len(profileMenuItems)-1 && profileMenuItems[app.home.menuIndex].Label != "关于" {
+		sendKey(t, app, tea.KeyDown)
+	}
+	cmd = sendKey(t, app, tea.KeyEnter)
+	applyAll(t, app, cmd)
+	snap.check("profile_about", app.View())
+
 	// Startup splash while validating a stored token.
 	store := &config.Store{
 		Path: t.TempDir() + "/config.json",

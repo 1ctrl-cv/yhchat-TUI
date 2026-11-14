@@ -218,9 +218,20 @@ func TestProfileAddFriend(t *testing.T) {
 		t.Fatalf("detail = %v, want add-friend form", app.home.detail)
 	}
 
-	app.home.fields[0].SetValue("2")
-	app.home.fields[1].SetValue("2002")
-	app.home.fields[2].SetValue("你好")
+	// Cycle ID -> verification -> type tabs and pick 群聊.
+	sendKey(t, app, tea.KeyTab)
+	sendKey(t, app, tea.KeyTab)
+	if !app.home.addFriendTabsFocus {
+		t.Fatalf("expected type tabs focus")
+	}
+	sendKey(t, app, tea.KeyRight)
+	if app.home.addFriendType != 1 {
+		t.Fatalf("add friend type = %d, want group", app.home.addFriendType)
+	}
+	sendKey(t, app, tea.KeyEnter)
+	typeText(t, app, "2002")
+	sendKey(t, app, tea.KeyTab)
+	typeText(t, app, "你好")
 	cmd = sendKey(t, app, tea.KeyEnter)
 	app.Update(waitFor[profileActionDoneMsg](t, cmd))
 	if len(ts.friendApplies) != 1 {
@@ -250,9 +261,9 @@ func TestProfileUserDataAndSettings(t *testing.T) {
 		}
 	}
 
-	// Esc back to the menu, then open 设置 (index 8).
+	// Esc back to the menu, then open 设置.
 	sendKey(t, app, tea.KeyEsc)
-	for app.home.menuIndex < 8 {
+	for app.home.menuIndex < len(profileMenuItems)-1 && profileMenuItems[app.home.menuIndex].Label != "设置" {
 		sendKey(t, app, tea.KeyDown)
 	}
 	cmd = sendKey(t, app, tea.KeyEnter)
@@ -312,5 +323,55 @@ func TestContactsEnterChat(t *testing.T) {
 	}
 	if conv := app.chat.selectedConv(); conv == nil || conv.ChatID != "4001" {
 		t.Fatalf("synthetic conversation = %+v", conv)
+	}
+}
+
+func TestProfileAboutPage(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	openHomeScreen(t, app)
+
+	view := app.View()
+	if strings.Contains(view, "开发文档") {
+		t.Fatalf("开发文档 should be removed from the profile menu\n%s", view)
+	}
+	if !strings.Contains(view, "关于") {
+		t.Fatalf("关于 menu item missing\n%s", view)
+	}
+
+	for app.home.menuIndex < len(profileMenuItems)-1 && profileMenuItems[app.home.menuIndex].Label != "关于" {
+		sendKey(t, app, tea.KeyDown)
+	}
+	cmd := sendKey(t, app, tea.KeyEnter)
+	applyAll(t, app, cmd)
+	if app.home.detail != detailAbout {
+		t.Fatalf("detail = %v, want about", app.home.detail)
+	}
+	view = app.View()
+	for _, want := range []string{"作者", "1ctrl-cv", "项目地址", "https://github.com/1ctrl-cv/yhchat-TUI"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("about view missing %q\n%s", want, view)
+		}
+	}
+}
+
+func TestAddFriendDialogLayout(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	openHomeScreen(t, app)
+
+	// Menu: 添加好友/群/机器人 is the 4th item.
+	for i := 0; i < 3; i++ {
+		sendKey(t, app, tea.KeyDown)
+	}
+	cmd := sendKey(t, app, tea.KeyEnter)
+	applyAll(t, app, cmd)
+	view := app.View()
+	for _, want := range []string{"添加好友", "输入用户、群或机器人的 ID", "好友", "群聊", "机器人", "验证消息", "发送申请", "取消"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("add friend dialog missing %q\n%s", want, view)
+		}
 	}
 }
