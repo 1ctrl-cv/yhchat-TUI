@@ -31,7 +31,7 @@ import (
 func main() {
 	var (
 		showVersion = flag.Bool("version", false, "打印版本号并退出")
-		configPath  = flag.String("config", "", "配置文件路径（默认: 用户配置目录/yhchat-tui/config.json）")
+		configPath  = flag.String("config", "", "配置文件路径（默认: ~/.yhchat-tui/config.json）")
 		serverURL   = flag.String("server", "", "API 服务器地址（默认: "+api.DefaultBaseURL+"）")
 	)
 	flag.Parse()

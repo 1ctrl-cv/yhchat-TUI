@@ -152,3 +152,65 @@ func TestSaveIsAtomicJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultPathUsesHomeDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("YHCHAT_CONFIG_DIR", "")
+	previous := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = previous })
+
+	path, err := DefaultPath()
+	if err != nil {
+		t.Fatalf("DefaultPath: %v", err)
+	}
+	want := filepath.Join(home, ".yhchat-tui", "config.json")
+	if path != want {
+		t.Fatalf("path = %q, want %q", path, want)
+	}
+}
+
+func TestLoadMigratesLegacyConfig(t *testing.T) {
+	home := t.TempDir()
+	legacyDir := t.TempDir()
+	t.Setenv("YHCHAT_CONFIG_DIR", "")
+
+	previousHome := userHomeDir
+	previousConfig := userConfigDir
+	userHomeDir = func() (string, error) { return home, nil }
+	userConfigDir = func() (string, error) { return legacyDir, nil }
+	t.Cleanup(func() {
+		userHomeDir = previousHome
+		userConfigDir = previousConfig
+	})
+
+	legacyPath := filepath.Join(legacyDir, AppName, "config.json")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := Config{Token: "legacy-token", DeviceID: "legacy-device", LastEmail: "a@b.com"}
+	raw, _ := json.Marshal(legacy)
+	if err := os.WriteFile(legacyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	wantPath := filepath.Join(home, ".yhchat-tui", "config.json")
+	if store.Path != wantPath {
+		t.Fatalf("path = %q, want %q", store.Path, wantPath)
+	}
+	if store.Data.Token != "legacy-token" || store.Data.DeviceID != "legacy-device" || store.Data.LastEmail != "a@b.com" {
+		t.Fatalf("legacy config not migrated: %+v", store.Data)
+	}
+	// The migrated file must exist at the new location.
+	migrated, err := Load(wantPath)
+	if err != nil {
+		t.Fatalf("reload migrated: %v", err)
+	}
+	if migrated.Data.Token != "legacy-token" {
+		t.Fatalf("migrated token = %q", migrated.Data.Token)
+	}
+}
