@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-`yhchat-tui` 是云湖（Yunhu）社交平台的终端客户端，Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea) 实现，支持 Windows / Linux。
+`yhchat-tui` 是云湖（Yunhu）社交平台的终端客户端，Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea) 实现，支持 Windows / macOS / Linux。
 
 当前里程碑：
 
@@ -26,7 +26,7 @@ go test ./... -count=1
 ```
 
 - 单一二进制构建：`go build -o yhchat-tui .`
-- 全量构建（检查 + 测试 + 9 平台交叉编译，只产出可执行文件）：
+- 全量构建（检查 + 测试 + 12 个目标交叉编译，只产出可执行文件）：
 
 ```powershell
 pwsh -File scripts\build.ps1          # Windows
@@ -93,6 +93,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 上游 API 文档：`../yhchatAPI/src/api/v1/*.md`、`../yhchatAPI/src/full.proto`、`../yhchatAPI/src/api/wss/`
 - 本项目 API 实测记录：[`docs/API_NOTES.md`](docs/API_NOTES.md)
 - 登录里程碑独立验收报告：[`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+
 
 
 

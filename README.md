@@ -1,6 +1,6 @@
 # 云湖 TUI 客户端（yhchat-tui）
 
-一个用 Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea) 编写的云湖（Yunhu）社交平台命令行客户端，支持 **Windows** 和 **Linux**。
+一个用 Go + [Bubble Tea](https://github.com/charmbracelet/bubbletea) 编写的云湖（Yunhu）社交平台命令行客户端，支持 **Windows**、**macOS** 与 **Linux**。
 当前版本已实现**登录**、**主窗口（会话列表 + 消息历史 + 发送文本）**、**通讯录**、**社区浏览**与**个人页面**；
 WebSocket 实时收发、社区互动与通讯录申请处理放到下一阶段。
 
@@ -20,7 +20,7 @@ WebSocket 实时收发、社区互动与通讯录申请处理放到下一阶段�
 - **我的（个人页面）**：个人卡片（昵称/ID/金币/VIP/头像）+ 菜单：修改头像、修改昵称、个人资料、添加好友/群/机器人、创建群聊、创建机器人、机器人控制台、开发文档、设置、关于我们、退出登录
   - 已实现：修改昵称、修改头像（URL）、查看个人资料、发送添加申请、设置/关于/文档信息页、退出登录；创建群聊/机器人等暂为占位页
 - **退出登录**：调用 `POST /v1/user/logout` 并清除本地 token
-- **跨平台**：纯 Go、无 CGO；Windows / Linux（amd64、arm64）
+- **跨平台**：纯 Go、无 CGO；Windows（386/amd64/arm64）、macOS（amd64/arm64）、Linux（amd64/arm64/386/armv6/armv7/loong64/riscv64）
 - **全终端界面**：顶部标题栏 + 内容区 + **最底部快捷键提示栏**，不使用浮动卡片；小终端自动收紧间距（建议 ≥24 行）
 
 ## 界面预览
@@ -55,7 +55,7 @@ WebSocket 实时收发、社区互动与通讯录申请处理放到下一阶段�
 
 ### 全量构建（推荐）
 
-一条命令完成：代码检查（gofmt / go vet）→ 测试 → Windows / Linux 全架构交叉编译，
+一条命令完成：代码检查（gofmt / go vet）→ 测试 → Windows / macOS / Linux 全架构交叉编译，
 并为每个目标注入版本 / commit / 构建时间。**产物只有各平台的可执行文件，不做打包。**
 
 ```powershell
@@ -68,7 +68,7 @@ pwsh -File scripts\build.ps1
 ./scripts/build.sh
 ```
 
-两个入口只是薄封装，真正的构建逻辑在跨平台的 Go 构建器 [`tools/build`](tools/build/main.go) 中，
+两个入口只是薄封装，真正的构建逻辑在 [`tools/build`](tools/build/main.go) 中，
 因此 Windows 与 Linux 产物完全一致，且不依赖外部 `zip` / `tar` / `sha256sum` 工具。
 
 常用参数（两个脚本一致，用 `-help` 查看全部）：
@@ -82,19 +82,21 @@ pwsh -File scripts\build.ps1
 | `-skip-tests` | 跳过 go test |
 | `-no-clean` | 构建前不清空输出目录 |
 
-默认目标（9 个）：
+默认目标（12 个）：
 
 | 系统 | 架构 |
 | --- | --- |
 | Windows | 386、amd64、arm64 |
-| Linux | 386、amd64、arm(v7)、arm64、loong64、riscv64 |
+| macOS | amd64、arm64 |
+| Linux | 386、amd64、armv6、armv7、arm64、loong64、riscv64 |
 
 产物示例（`dist/`，只有可执行文件）：
 
 ```
 dist/
 ├── yhchat-tui-windows-386.exe / -amd64.exe / -arm64.exe
-└── yhchat-tui-linux-386 / -amd64 / -arm / -arm64 / -loong64 / -riscv64
+├── yhchat-tui-darwin-amd64 / -arm64
+└── yhchat-tui-linux-386 / -amd64 / -armv6 / -armv7 / -arm64 / -loong64 / -riscv64
 ```
 
 ### 单平台构建
@@ -212,6 +214,7 @@ vendor/                    依赖（离线构建）
 
 本项目为第三方非官方实现，与云湖官方无关。API 属于公开文档记录的接口，可能随时变更；
 请勿将本项目用于违反服务条款的用途，并妥善保管自己的账号凭据与 token。
+
 
 
 

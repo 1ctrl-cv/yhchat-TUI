@@ -7,7 +7,7 @@
     实际构建逻辑在 tools/build（Go 实现，跨平台），因此 Windows 与 Linux 产物
     完全一致。本脚本只做参数转发。
 
-    一条命令完成：代码检查（gofmt/go vet）→ 测试 → Windows/Linux 全架构交叉编译，
+    一条命令完成：代码检查（gofmt/go vet）→ 测试 → Windows/macOS/Linux 全架构交叉编译，
     并为每个目标注入版本/commit/构建时间。产物只有各平台的可执行文件，不做打包。
 
     默认输出目录为仓库下的 dist/。
@@ -96,5 +96,6 @@ catch {
 finally {
     Pop-Location
 }
+
 
 

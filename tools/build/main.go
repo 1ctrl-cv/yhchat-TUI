@@ -44,11 +44,12 @@ type target struct {
 
 // artifact is a built executable.
 type artifact struct {
-	OS   string
-	Arch string
-	Name string
-	Path string
-	Size int64
+	OS    string
+	Arch  string
+	Label string // display label, e.g. linux/armv6
+	Name  string
+	Path  string
+	Size  int64
 }
 
 // buildMeta holds information collected from git and the toolchain.
@@ -93,7 +94,7 @@ func main() {
 
 // usageText returns the -help output.
 func usageText() string {
-	return `yhchat-tui 全量构建（Windows / Linux）
+	return `yhchat-tui 全量构建（Windows / macOS / Linux）
 
 用法: go run ./tools/build [选项]
 （更常用的入口: pwsh -File scripts\build.ps1 或 ./scripts/build.sh，二者都会转发到这里）
@@ -103,8 +104,9 @@ func usageText() string {
   -out <目录>       输出目录（默认 <仓库>/dist）
   -targets <列表>   目标列表，逗号或空格分隔，默认:
                     windows/386 windows/amd64 windows/arm64
-                    linux/386 linux/amd64 linux/arm linux/arm64
-                    linux/loong64 linux/riscv64
+                    darwin/amd64 darwin/arm64
+                    linux/386 linux/amd64 linux/armv6 linux/armv7
+                    linux/arm64 linux/loong64 linux/riscv64
   -skip-checks      跳过 gofmt / go vet
   -skip-tests       跳过 go test
   -no-clean         构建前不清空输出目录
@@ -115,7 +117,7 @@ func usageText() string {
 示例:
   go run ./tools/build
   go run ./tools/build -version 1.0.0 -skip-tests
-  go run ./tools/build -targets windows/amd64,linux/amd64
+  go run ./tools/build -targets windows/amd64,darwin/arm64,linux/amd64
 `
 }
 
@@ -157,7 +159,7 @@ func run(opts options) error {
 	ok("output  : %s", outDir)
 	var targetNames []string
 	for _, t := range targets {
-		targetNames = append(targetNames, t.OS+"/"+t.Arch)
+		targetNames = append(targetNames, targetLabel(t))
 	}
 	ok("targets : %s", strings.Join(targetNames, ", "))
 
@@ -338,20 +340,49 @@ func checkFormatting(goBin string) error {
 // ---------------------------------------------------------------------------
 // targets
 
-// defaultTargets are all common Windows/Linux architectures.
+// defaultTargets are all common Windows / macOS / Linux architectures.
 func defaultTargets() []target {
 	return []target{
+		// Windows
 		{OS: "windows", Arch: "386"},
 		{OS: "windows", Arch: "amd64"},
 		{OS: "windows", Arch: "arm64"},
 
+		// MacOS
+		{OS: "darwin", Arch: "amd64"},
+		{OS: "darwin", Arch: "arm64"},
+
+		// Linux
 		{OS: "linux", Arch: "386"},
 		{OS: "linux", Arch: "amd64"},
+		{OS: "linux", Arch: "arm", GOARM: "6"},
 		{OS: "linux", Arch: "arm", GOARM: "7"},
 		{OS: "linux", Arch: "arm64"},
 		{OS: "linux", Arch: "loong64"},
 		{OS: "linux", Arch: "riscv64"},
 	}
+}
+
+// targetLabel returns "os/arch" with an armv6/armv7 suffix for ARM targets.
+func targetLabel(t target) string {
+	arch := t.Arch
+	if t.Arch == "arm" && t.GOARM != "" {
+		arch = "armv" + t.GOARM
+	}
+	return t.OS + "/" + arch
+}
+
+// targetName returns the output file name for a target.
+func targetName(t target) string {
+	arch := t.Arch
+	if t.Arch == "arm" && t.GOARM != "" {
+		arch = "armv" + t.GOARM
+	}
+	name := fmt.Sprintf("%s-%s-%s", appName, t.OS, arch)
+	if t.OS == "windows" {
+		name += ".exe"
+	}
+	return name
 }
 
 // parseTargets parses the -targets flag ("os/arch" separated by comma/space).
@@ -375,10 +406,17 @@ func parseTargets(spec string) ([]target, error) {
 		if t.OS != "windows" && t.OS != "linux" && t.OS != "darwin" {
 			return nil, fmt.Errorf("不支持的目标系统: %s（只支持 windows、linux 与 darwin）", t.OS)
 		}
-		if t.Arch == "arm" {
+		switch t.Arch {
+		case "arm":
 			t.GOARM = "7"
+		case "armv6", "armv7":
+			t.GOARM = strings.TrimPrefix(t.Arch, "armv")
+			t.Arch = "arm"
 		}
 		key := t.OS + "/" + t.Arch
+		if t.GOARM != "" {
+			key += "/v" + t.GOARM
+		}
 		if seen[key] {
 			continue
 		}
@@ -431,10 +469,7 @@ func buildTargets(goBin string, meta *buildMeta, targets []target, outDir string
 
 	artifacts := make([]artifact, 0, len(targets))
 	for _, t := range targets {
-		name := fmt.Sprintf("%s-%s-%s", appName, t.OS, t.Arch)
-		if t.OS == "windows" {
-			name += ".exe"
-		}
+		name := targetName(t)
 		outPath := filepath.Join(outDir, name)
 
 		env := append(os.Environ(),
@@ -445,7 +480,7 @@ func buildTargets(goBin string, meta *buildMeta, targets []target, outDir string
 		if t.GOARM != "" {
 			env = append(env, "GOARM="+t.GOARM)
 		}
-		fmt.Printf("    -> %-8s %-6s %s\n", t.OS, t.Arch, name)
+		fmt.Printf("    -> %-10s %-34s\n", targetLabel(t), name)
 
 		cmd := exec.Command(goBin, "build",
 			"-trimpath", "-buildvcs=false", modFlag,
@@ -456,7 +491,7 @@ func buildTargets(goBin string, meta *buildMeta, targets []target, outDir string
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("构建失败 %s/%s: %w", t.OS, t.Arch, err)
+			return nil, fmt.Errorf("构建失败 %s: %w", targetLabel(t), err)
 		}
 		info, err := os.Stat(outPath)
 		if err != nil {
@@ -466,11 +501,12 @@ func buildTargets(goBin string, meta *buildMeta, targets []target, outDir string
 			return nil, fmt.Errorf("构建产物为空: %s", outPath)
 		}
 		artifacts = append(artifacts, artifact{
-			OS:   t.OS,
-			Arch: t.Arch,
-			Name: name,
-			Path: outPath,
-			Size: info.Size(),
+			OS:    t.OS,
+			Arch:  t.Arch,
+			Label: targetLabel(t),
+			Name:  name,
+			Path:  outPath,
+			Size:  info.Size(),
 		})
 	}
 	return artifacts, nil
@@ -524,7 +560,7 @@ func printSummary(artifacts []artifact, outDir string) {
 	var total int64
 	for _, a := range artifacts {
 		fmt.Printf("    %-14s %-38s %.2f MB\n",
-			a.OS+"/"+a.Arch, a.Name, float64(a.Size)/(1024*1024))
+			a.Label, a.Name, float64(a.Size)/(1024*1024))
 		total += a.Size
 	}
 	fmt.Printf("\n共 %d 个可执行文件，合计 %.2f MB\n输出目录: %s\n",
