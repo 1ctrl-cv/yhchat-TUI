@@ -3,16 +3,19 @@ package tui
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -59,6 +62,16 @@ type testServer struct {
 	loggedOut          bool
 	sentMessages       []sentTestMessage
 	sendError          string
+	editedNickname     string
+	editedAvatar       string
+	friendApplies      []testFriendApply
+}
+
+// testFriendApply records an add-friend request sent through the mock API.
+type testFriendApply struct {
+	ChatID   string
+	ChatType int32
+	Remark   string
 }
 
 // SetSendError makes the next send-message request fail with the given text.
@@ -154,6 +167,214 @@ func newTestServer(t *testing.T) *testServer {
 		ts.loggedOut = true
 		ts.mu.Unlock()
 		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/friend/address-book-list", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("token") != testToken {
+			writeTestJSON(w, map[string]any{"code": -101, "msg": "未登录"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(testAddressBookProto())
+	})
+
+	mux.HandleFunc("/v1/friend/request-list", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("token") != testToken {
+			writeTestJSON(w, map[string]any{"code": -101, "msg": "未登录"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(testRequestListProto())
+	})
+
+	mux.HandleFunc("/v1/friend/apply", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ChatID   string `json:"chatId"`
+			ChatType int32  `json:"chatType"`
+			Remark   string `json:"remark"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.friendApplies = append(ts.friendApplies, testFriendApply{ChatID: payload.ChatID, ChatType: payload.ChatType, Remark: payload.Remark})
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/user/edit-nickname", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		ts.mu.Lock()
+		ts.editedNickname = string(pbFieldBytes(body, 3))
+		ts.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(testStatusResponseProto(1, "success"))
+	})
+
+	mux.HandleFunc("/v1/user/edit-avatar", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		ts.mu.Lock()
+		ts.editedAvatar = string(pbFieldBytes(body, 2))
+		ts.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(testStatusResponseProto(1, "success"))
+	})
+
+	mux.HandleFunc("/v1/user/get-user-data", func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, map[string]any{
+			"code": 1, "msg": "success",
+			"data": map[string]any{
+				"data": map[string]any{
+					"id":            1,
+					"userId":        testUserID,
+					"introduction":  "这是测试简介",
+					"gender":        1,
+					"birthday":      946656000,
+					"province":      "北京市",
+					"city":          "北京城区",
+					"district":      "东城区",
+					"locationCode":  "110101",
+					"lastLoginTime": 1710000000,
+					"update_time":   1710000100,
+				},
+			},
+		})
+	})
+
+	mux.HandleFunc("/v1/community/ba/following-ba-list", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("token") != testToken {
+			writeTestJSON(w, map[string]any{"code": -101, "msg": "未登录"})
+			return
+		}
+		var payload struct {
+			Typ  int32 `json:"typ"`
+			Size int   `json:"size"`
+			Page int   `json:"page"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		writeTestJSON(w, map[string]any{
+			"code": 1, "msg": "success",
+			"data": map[string]any{
+				"ba": []any{
+					map[string]any{
+						"id": 41, "name": "云湖&功能反馈", "avatar": "https://example.com/ba41.png",
+						"memberNum": 4303, "postNum": 10344, "groupNum": 64,
+						"createTime": 1665233353, "lastActive": 1757794419,
+						"createTimeText": "2022-10-08 20:49:13", "isFollowed": "1",
+					},
+					map[string]any{
+						"id": 42, "name": "玩机", "avatar": "https://example.com/ba42.png",
+						"memberNum": 5608, "postNum": 3600, "groupNum": 12,
+						"createTime": 1665233353, "lastActive": 1757794419,
+						"createTimeText": "2022-10-08 20:49:13", "isFollowed": "0",
+					},
+				},
+				"total": 2,
+			},
+		})
+	})
+
+	mux.HandleFunc("/v1/community/ba/info", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		name := "云湖&功能反馈"
+		if payload.ID == 42 {
+			name = "玩机"
+		}
+		writeTestJSON(w, map[string]any{
+			"code": 1, "msg": "success",
+			"data": map[string]any{
+				"ba": map[string]any{
+					"id": payload.ID, "name": name, "avatar": "https://example.com/ba.png",
+					"memberNum": 4303, "postNum": 10344, "groupNum": 64,
+					"createTimeText": "2022-10-08 20:49:13", "isFollowed": "1",
+				},
+			},
+		})
+	})
+
+	mux.HandleFunc("/v1/community/posts/post-list", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Typ  int32 `json:"typ"`
+			BaID int64 `json:"baId"`
+			Size int   `json:"size"`
+			Page int   `json:"page"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		writeTestJSON(w, map[string]any{
+			"code": 1, "msg": "success",
+			"data": map[string]any{
+				"posts": []any{
+					map[string]any{
+						"id": 31622, "baId": payload.BaID, "senderId": "7384288",
+						"title": "云湖新用户必读", "contentType": 2,
+						"content":    "## 云湖阶段安排\n\n- 第一内测阶段(0-1000用户)\n- 第二内测阶段(1001-10000用户)\n\n**欢迎来到云湖**",
+						"createTime": 1757755754, "createTimeText": "2025-09-13 17:29:14",
+						"likeNum": 12, "commentNum": 2, "collectNum": 3, "amountNum": 0,
+						"senderNickname": "Feng", "senderAvatar": "https://example.com/u.png",
+						"isSticky": 1, "isLiked": "0", "isCollected": 0, "isReward": 0, "isVip": 1,
+					},
+					map[string]any{
+						"id": 31623, "baId": payload.BaID, "senderId": "1001",
+						"title": "玩机交流贴", "contentType": 1,
+						"content":    "普通文本内容预览",
+						"createTime": 1757755000, "createTimeText": "2025-09-13 17:16:40",
+						"likeNum": 1, "commentNum": 0, "collectNum": 0,
+						"senderNickname": "小明", "senderAvatar": "https://example.com/u2.png",
+						"isSticky": 0, "isLiked": "0",
+					},
+				},
+				"total": 2,
+			},
+		})
+	})
+
+	mux.HandleFunc("/v1/community/posts/post-detail", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		writeTestJSON(w, map[string]any{
+			"code": 1, "msg": "success",
+			"data": map[string]any{
+				"ba": map[string]any{
+					"id": 41, "name": "云湖&功能反馈", "memberNum": 4303, "postNum": 10344, "groupNum": 64,
+					"isFollowed": "1",
+				},
+				"isAdmin": 0,
+				"post": map[string]any{
+					"id": payload.ID, "baId": 41, "senderId": "7384288",
+					"title": "云湖新用户必读", "contentType": 2,
+					"content":    "## 云湖阶段安排\n\n- 第一内测阶段(0-1000用户)\n- 第二内测阶段(1001-10000用户)\n\n**欢迎来到云湖**\n\n[官方文档](https://example.com)",
+					"createTime": 1757755754, "createTimeText": "2025-09-13 17:29:14",
+					"likeNum": 12, "commentNum": 2, "collectNum": 3,
+					"senderNickname": "Feng", "senderAvatar": "https://example.com/u.png",
+					"isSticky": 1, "isLiked": "0", "isVip": 1,
+				},
+			},
+		})
+	})
+
+	mux.HandleFunc("/v1/community/comment/comment-list", func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, map[string]any{
+			"code": 1, "msg": "success",
+			"data": map[string]any{
+				"comments": []any{
+					map[string]any{
+						"id": 1, "postId": 31622, "senderId": "1001", "content": "来了来了",
+						"createTime": 1757755900, "createTimeText": "2025-09-13 17:31:40",
+						"senderNickname": "小明", "senderAvatar": "", "likeNum": 0, "isLiked": "0",
+					},
+					map[string]any{
+						"id": 2, "postId": 31622, "senderId": "1002", "content": "支持一下",
+						"createTime": 1757756000, "createTimeText": "2025-09-13 17:33:20",
+						"senderNickname": "小红", "senderAvatar": "", "likeNum": 0, "isLiked": "0",
+					},
+				},
+				"isAdmin": 0,
+				"total":   2,
+			},
+		})
 	})
 
 	mux.HandleFunc("/v1/conversation/list", func(w http.ResponseWriter, r *http.Request) {
@@ -609,4 +830,112 @@ func pbFieldVarint(body []byte, field protowire.Number) uint64 {
 		body = body[m:]
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------------------
+// Contacts fixtures for the mock server.
+
+// testAddressBookProto builds a successful AddressBookListResponse with three
+// groups (用户 / 我加入的群聊 / 机器人).
+func testAddressBookProto() []byte {
+	userGroup := []byte{}
+	userGroup = pbString(userGroup, 1, "用户")
+	contact := []byte{}
+	contact = pbString(contact, 1, "1001")
+	contact = pbString(contact, 2, "小明")
+	contact = pbString(contact, 3, "https://example.com/u1.png")
+	contact = pbString(contact, 8, "小明")
+	userGroup = pbBytes(userGroup, 2, contact)
+	userGroup = pbVarint(userGroup, 3, 1)
+
+	groupGroup := []byte{}
+	groupGroup = pbString(groupGroup, 1, "我加入的群聊")
+	ownerGroup := []byte{}
+	ownerGroup = pbString(ownerGroup, 1, "2002")
+	ownerGroup = pbString(ownerGroup, 8, "测试群")
+	ownerGroup = pbBytes(ownerGroup, 3, []byte("https://example.com/g1.png"))
+	ownerGroup = pbVarint(ownerGroup, 4, 100)
+	groupGroup = pbBytes(groupGroup, 2, ownerGroup)
+	memberGroup := []byte{}
+	memberGroup = pbString(memberGroup, 1, "3002")
+	memberGroup = pbString(memberGroup, 8, "摸鱼闲聊茶馆")
+	memberGroup = pbVarint(memberGroup, 5, 1)
+	groupGroup = pbBytes(groupGroup, 2, memberGroup)
+	groupGroup = pbVarint(groupGroup, 3, 2)
+
+	botGroup := []byte{}
+	botGroup = pbString(botGroup, 1, "机器人")
+	bot := []byte{}
+	bot = pbString(bot, 1, "4001")
+	bot = pbString(bot, 8, "云湖助手")
+	botGroup = pbBytes(botGroup, 2, bot)
+	botGroup = pbVarint(botGroup, 3, 3)
+
+	var out []byte
+	out = pbBytes(out, 1, testPBStatus(1, "success"))
+	out = pbBytes(out, 2, userGroup)
+	out = pbBytes(out, 2, groupGroup)
+	out = pbBytes(out, 2, botGroup)
+	out = pbString(out, 3, "address-md5")
+	return out
+}
+
+// testRequestListProto builds a RequestListResponse with one pending request.
+func testRequestListProto() []byte {
+	request := []byte{}
+	request = pbString(request, 1, testName)    // receiver_name
+	request = pbString(request, 3, "申请人小明")     // name
+	request = pbString(request, 5, "云湖交流群")     // group_name
+	request = pbString(request, 11, "3001")     // target_id
+	request = pbVarint(request, 13, 0)          // result
+	request = pbVarint(request, 16, 1710000000) // invite_at
+	request = pbString(request, 17, "2024-03-09 16:00:00")
+	request = pbVarint(request, 18, 7)        // request_id
+	request = pbString(request, 23, "你好，请通过") // note
+
+	var out []byte
+	out = pbBytes(out, 1, testPBStatus(1, "success"))
+	out = pbBytes(out, 2, request)
+	out = pbVarint(out, 3, 2)
+	out = pbVarint(out, 4, 1)
+	return out
+}
+
+// isTransientMsg reports whether msg is a repeating timer (spinner / cursor
+// blink) that must not be followed, otherwise test helpers loop forever.
+func isTransientMsg(msg tea.Msg) bool {
+	if _, ok := msg.(spinner.TickMsg); ok {
+		return true
+	}
+	name := fmt.Sprintf("%T", msg)
+	return strings.Contains(name, "BlinkMsg")
+}
+
+// applyAll dispatches cmd's messages to the app (and any follow-up commands),
+// skipping repeating timer ticks and capping the chain length.
+func applyAll(t *testing.T, app *App, cmd tea.Cmd) {
+	t.Helper()
+	var apply func(c tea.Cmd, depth int)
+	apply = func(c tea.Cmd, depth int) {
+		if depth > 8 {
+			return
+		}
+		for _, msg := range collectMsgs(c) {
+			if isTransientMsg(msg) {
+				continue
+			}
+			_, next := app.Update(msg)
+			if next != nil {
+				apply(next, depth+1)
+			}
+		}
+	}
+	apply(cmd, 0)
+}
+
+// switchToSection switches the app to a top-level section and loads its data.
+func switchToSection(t *testing.T, app *App, to section) {
+	t.Helper()
+	_, cmd := app.Update(switchSectionMsg{to: to})
+	applyAll(t, app, cmd)
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Palette uses adaptive colors so the UI is readable on both dark and light
@@ -84,20 +85,22 @@ var (
 				Foreground(colorOnAccent).
 				Background(colorAccent).
 				Padding(0, 1)
-	convSelectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	convNameStyle      = lipgloss.NewStyle().Foreground(colorText)
-	convTimeStyle      = lipgloss.NewStyle().Foreground(colorMuted)
-	convPreviewStyle   = lipgloss.NewStyle().Foreground(colorMuted)
-	unreadBadgeStyle   = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
-	chatTitleStyle     = lipgloss.NewStyle().Bold(true).Foreground(colorText)
-	chatSubtitleStyle  = lipgloss.NewStyle().Foreground(colorMuted)
-	messageNameStyle   = lipgloss.NewStyle().Foreground(colorMuted)
-	messageOwnNameSt   = lipgloss.NewStyle().Foreground(colorAccent)
-	messageTimeStyle   = lipgloss.NewStyle().Foreground(colorMuted)
-	messageTextStyle   = lipgloss.NewStyle().Foreground(colorText)
-	messageOwnTextSt   = lipgloss.NewStyle().Foreground(colorText)
-	messageTipStyle    = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
-	chatStatusErrStyle = lipgloss.NewStyle().Foreground(colorError)
+	convSelectedStyle        = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	convNameStyle            = lipgloss.NewStyle().Foreground(colorText)
+	convTimeStyle            = lipgloss.NewStyle().Foreground(colorMuted)
+	convPreviewStyle         = lipgloss.NewStyle().Foreground(colorMuted)
+	unreadBadgeStyle         = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	chatTitleStyle           = lipgloss.NewStyle().Bold(true).Foreground(colorText)
+	chatSubtitleStyle        = lipgloss.NewStyle().Foreground(colorMuted)
+	messageNameStyle         = lipgloss.NewStyle().Foreground(colorMuted)
+	messageOwnNameSt         = lipgloss.NewStyle().Foreground(colorAccent)
+	messageTimeStyle         = lipgloss.NewStyle().Foreground(colorMuted)
+	messageTextStyle         = lipgloss.NewStyle().Foreground(colorText)
+	messageOwnTextSt         = lipgloss.NewStyle().Foreground(colorText)
+	messageTipStyle          = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
+	profileMenuStyle         = lipgloss.NewStyle().Foreground(colorText)
+	profileMenuSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	chatStatusErrStyle       = lipgloss.NewStyle().Foreground(colorError)
 
 	hintStyle = lipgloss.NewStyle().Foreground(colorMuted)
 
@@ -146,10 +149,21 @@ func separator(width int) string {
 	return separatorStyle.Render(strings.Repeat("─", width))
 }
 
-// padLine pads s with spaces on the right to width terminal cells (may be
-// shorter than requested when the text is already wider).
+// padLine pads s with spaces on the right to width terminal cells. Lines wider
+// than width are truncated (ANSI-aware) so multi-column layouts never overflow.
 func padLine(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
 	w := lipgloss.Width(s)
+	if w > width {
+		s = ansi.Truncate(s, width, "…")
+		w = lipgloss.Width(s)
+		if w > width {
+			s = ansi.Truncate(s, width, "")
+			w = lipgloss.Width(s)
+		}
+	}
 	if w >= width {
 		return s
 	}

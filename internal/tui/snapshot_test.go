@@ -85,6 +85,20 @@ func TestViewSnapshots(t *testing.T) {
 	}
 	snap.check("chat", app.View())
 
+	// Contacts page.
+	switchToSection(t, app, sectionContacts)
+	snap.check("contacts", app.View())
+
+	// Community page (list + selected community detail).
+	switchToSection(t, app, sectionCommunity)
+	snap.check("community", app.View())
+
+	// Article view.
+	sendKey(t, app, tea.KeyEnter)
+	cmd = sendKey(t, app, tea.KeyEnter)
+	app.Update(waitFor[postDetailMsg](t, cmd))
+	snap.check("community_article", app.View())
+
 	// Account ("我的") screen.
 	openHomeScreen(t, app)
 	snap.check("home", app.View())

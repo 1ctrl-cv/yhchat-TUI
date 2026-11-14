@@ -54,7 +54,7 @@ type mainWindowModel struct {
 	filtered      []api.Conversation
 	selected      int
 	convOffset    int
-	sidebarIndex  int
+	sidebarCursor section
 
 	search textinput.Model
 	input  textinput.Model
@@ -278,19 +278,19 @@ func (m mainWindowModel) handleKey(msg tea.KeyMsg) (mainWindowModel, tea.Cmd) {
 // handleSidebarKey handles navigation inside the sidebar.
 func (m mainWindowModel) handleSidebarKey(key string, msg tea.KeyMsg) (mainWindowModel, tea.Cmd) {
 	switch key {
-	case "up", "down":
-		if m.sidebarIndex == 0 {
-			m.sidebarIndex = 1
-		} else {
-			m.sidebarIndex = 0
-		}
+	case "up":
+		m.sidebarCursor = nextSectionCursor(m.sidebarCursor, -1)
+		return m, nil
+	case "down":
+		m.sidebarCursor = nextSectionCursor(m.sidebarCursor, 1)
 		return m, nil
 	case "enter":
-		if m.sidebarIndex == 1 {
-			return m, func() tea.Msg { return openHomeMsg{} }
+		if m.sidebarCursor == sectionChat {
+			m.setFocus(focusConversations)
+			return m, m.applyFocus()
 		}
-		m.setFocus(focusConversations)
-		return m, m.applyFocus()
+		target := m.sidebarCursor
+		return m, func() tea.Msg { return switchSectionMsg{to: target} }
 	case "r":
 		return m.refreshConversations()
 	case "right":
@@ -702,24 +702,7 @@ func (m mainWindowModel) bodyLines(inner, bodyH int) []string {
 
 // sidebarLines renders the narrow sidebar column.
 func (m mainWindowModel) sidebarLines(bodyH int) []string {
-	lines := make([]string, bodyH)
-	items := []string{"聊", "我"}
-	for i, label := range items {
-		if i >= bodyH {
-			break
-		}
-		selected := i == sidebarChat
-		switch {
-		case selected && m.focus == focusSidebar:
-			lines[i] = padLine(sidebarActiveStyle.Render(label), sidebarWidth)
-		case selected:
-			lines[i] = padLine(lipgloss.NewStyle().
-				Bold(true).Foreground(colorAccent).Padding(0, 1).Render(label), sidebarWidth)
-		default:
-			lines[i] = padLine(sidebarItemStyle.Render(label), sidebarWidth)
-		}
-	}
-	return lines
+	return renderSidebar(bodyH, sectionChat, m.sidebarCursor, m.focus == focusSidebar)
 }
 
 // conversationLines renders the search box, conversation list and status line.
@@ -971,7 +954,7 @@ func (m mainWindowModel) chatWidth() int {
 func (m mainWindowModel) viewHints() string {
 	switch m.focus {
 	case focusSidebar:
-		return "↑↓ 选择栏目 · Enter 进入 · Tab 切换焦点 · Ctrl+C 退出"
+		return sidebarHint()
 	case focusSearch:
 		return "输入关键词筛选会话 · Enter 跳到列表 · Esc 清空 · Tab 切换焦点"
 	case focusConversations:

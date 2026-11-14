@@ -66,9 +66,21 @@ func TestEmailLoginFlow(t *testing.T) {
 
 	openHomeScreen(t, app)
 	view := app.View()
-	for _, want := range []string{testName, testUserID, "已登录", "138****1234", "d***@yunhu.chat", "YH-TEST-0001"} {
+	for _, want := range []string{testName, testUserID, "修改昵称", "退出登录"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("home view missing %q\n%s", want, view)
+			t.Errorf("profile view missing %q\n%s", want, view)
+		}
+	}
+
+	// "个人资料" opens the extended profile loaded from the API.
+	sendKey(t, app, tea.KeyDown)
+	sendKey(t, app, tea.KeyDown)
+	cmd := sendKey(t, app, tea.KeyEnter)
+	app.Update(waitFor[profileUserDataMsg](t, cmd))
+	view = app.View()
+	for _, want := range []string{"138****1234", "d***@yunhu.chat", "YH-TEST-0001", "这是测试简介"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("profile detail missing %q\n%s", want, view)
 		}
 	}
 }
@@ -447,12 +459,24 @@ func TestViewFitsTerminal(t *testing.T) {
 		app.Update(waitFor[captchaLoadedMsg](t, cmd))
 		check("login_sms_captcha", app.View())
 
-		// Chat window and home screen.
+		// Chat window, contacts, community and profile screens.
 		prefsApp, _ := newTestApp(t, ts)
 		prefsApp.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
 		loginEmail(t, prefsApp)
 		check("chat", prefsApp.View())
-		openHomeScreen(t, prefsApp)
+
+		switchToSection(t, prefsApp, sectionContacts)
+		check("contacts", prefsApp.View())
+
+		switchToSection(t, prefsApp, sectionCommunity)
+		check("community", prefsApp.View())
+		// Article view.
+		sendKey(t, prefsApp, tea.KeyEnter)
+		cmd = sendKey(t, prefsApp, tea.KeyEnter)
+		prefsApp.Update(waitFor[postDetailMsg](t, cmd))
+		check("community_article", prefsApp.View())
+
+		switchToSection(t, prefsApp, sectionProfile)
 		check("home", prefsApp.View())
 	}
 }

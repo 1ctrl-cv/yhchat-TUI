@@ -196,14 +196,13 @@ func TestMainWindowSidebarToHomeAndBack(t *testing.T) {
 		t.Fatalf("focus = %v, want sidebar", app.chat.focus)
 	}
 
-	// Select "我的" and open it.
-	sendKey(t, app, tea.KeyDown)
-	if app.chat.sidebarIndex != 1 {
-		t.Fatalf("sidebar index = %d, want 1", app.chat.sidebarIndex)
+	// Move the sidebar cursor to "我的" and open it.
+	for app.chat.sidebarCursor != sectionProfile {
+		sendKey(t, app, tea.KeyDown)
 	}
 	_, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("opening the account page should emit a message")
+		t.Fatal("opening the profile page should emit a message")
 	}
 	app.Update(cmd())
 	if app.screen != screenHome {

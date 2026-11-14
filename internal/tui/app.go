@@ -17,8 +17,10 @@ type screen int
 const (
 	screenLogin screen = iota
 	screenSplash
-	screenChat // 主窗口：会话列表 + 聊天
-	screenHome // 我的：账号信息
+	screenChat      // 主窗口：会话列表 + 聊天
+	screenContacts  // 通讯录：好友 / 群聊 / 机器人
+	screenCommunity // 社区：分区 / 文章
+	screenHome      // 我的：个人资料与设置
 )
 
 // App is the root Bubble Tea model. It owns the API client, the persisted
@@ -31,9 +33,11 @@ type App struct {
 	width  int
 	height int
 
-	login loginModel
-	home  homeModel
-	chat  mainWindowModel
+	login     loginModel
+	home      homeModel
+	chat      mainWindowModel
+	contacts  contactsModel
+	community communityModel
 
 	spinner spinner.Model
 }
@@ -48,6 +52,8 @@ func New(client *api.Client, store *config.Store) *App {
 	}
 	app.login = newLoginModel(client, store.Data)
 	app.home = newHomeModel(client, store.Data.Token)
+	app.contacts = newContactsModel(client, store.Data.Token)
+	app.community = newCommunityModel(client, store.Data.Token)
 	return app
 }
 
@@ -89,6 +95,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.login = a.login.resize(msg.Width, msg.Height)
 		a.home = a.home.resize(msg.Width, msg.Height)
 		a.chat = a.chat.resize(msg.Width, msg.Height)
+		a.contacts = a.contacts.resize(msg.Width, msg.Height)
+		a.community = a.community.resize(msg.Width, msg.Height)
 		return a, nil
 
 	case tea.KeyMsg:
@@ -114,6 +122,33 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openChatMsg:
 		return a, a.showChat()
+
+	case switchSectionMsg:
+		return a, a.switchSection(msg.to)
+
+	case contactsLoadedMsg, friendRequestsLoadedMsg:
+		if a.screen != screenContacts {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.contacts, cmd = a.contacts.Update(msg)
+		return a, cmd
+
+	case communitiesLoadedMsg, communityInfoMsg, postsLoadedMsg, postDetailMsg:
+		if a.screen != screenCommunity {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.community, cmd = a.community.Update(msg)
+		return a, cmd
+
+	case profileUserDataMsg, profileActionDoneMsg:
+		if a.screen != screenHome {
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.home, cmd = a.home.Update(msg)
+		return a, cmd
 
 	case captchaLoadedMsg, smsSentMsg, loginFailedMsg:
 		if a.screen != screenLogin {
@@ -159,6 +194,14 @@ func (a *App) route(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case screenHome:
 		var cmd tea.Cmd
 		a.home, cmd = a.home.Update(msg)
+		return a, cmd
+	case screenContacts:
+		var cmd tea.Cmd
+		a.contacts, cmd = a.contacts.Update(msg)
+		return a, cmd
+	case screenCommunity:
+		var cmd tea.Cmd
+		a.community, cmd = a.community.Update(msg)
 		return a, cmd
 	case screenSplash:
 		var cmd tea.Cmd
@@ -210,11 +253,14 @@ func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 
 // prepareHome (re)builds the account screen for a logged in account.
 func (a *App) prepareHome(user *api.UserInfo, okText string) {
-	a.home = newHomeModel(a.client, a.store.Data.Token).resize(a.width, a.height)
+	a.home = newHomeModel(a.client, a.store.Data.Token).resize(a.width, a.height).
+		withAccountInfo(a.store.Path, a.store.Data.DeviceID)
 	if user != nil {
 		a.home = a.home.withUser(user)
 		a.home.okText = okText
 	}
+	a.contacts = newContactsModel(a.client, a.store.Data.Token).resize(a.width, a.height)
+	a.community = newCommunityModel(a.client, a.store.Data.Token).resize(a.width, a.height)
 }
 
 // startChat creates the main window for the current token and starts loading
@@ -254,6 +300,51 @@ func (a *App) showChat() tea.Cmd {
 	return loadConversationsCmd(a.client, a.chat.token)
 }
 
+// switchSection switches to another top-level sidebar section, loading its data
+// on first use.
+func (a *App) switchSection(to section) tea.Cmd {
+	if a.store.Data.Token == "" {
+		return nil
+	}
+	switch to {
+	case sectionChat:
+		return a.showChat()
+	case sectionContacts:
+		if a.contacts.token != a.store.Data.Token {
+			a.contacts = newContactsModel(a.client, a.store.Data.Token).
+				resize(a.width, a.height).
+				withUser(a.chat.user)
+		} else if a.contacts.user == nil && a.chat.user != nil {
+			a.contacts = a.contacts.withUser(a.chat.user)
+		}
+		a.screen = screenContacts
+		if len(a.contacts.rows) == 0 && !a.contacts.loading {
+			updated, cmd := a.contacts.init()
+			a.contacts = updated
+			return cmd
+		}
+		return nil
+	case sectionCommunity:
+		if a.community.token != a.store.Data.Token {
+			a.community = newCommunityModel(a.client, a.store.Data.Token).
+				resize(a.width, a.height).
+				withUser(a.chat.user)
+		} else if a.community.user == nil && a.chat.user != nil {
+			a.community = a.community.withUser(a.chat.user)
+		}
+		a.screen = screenCommunity
+		if len(a.community.communities) == 0 && !a.community.loading {
+			updated, cmd := a.community.init()
+			a.community = updated
+			return cmd
+		}
+		return nil
+	case sectionProfile:
+		return a.showHome()
+	}
+	return nil
+}
+
 // handleLogoutDone clears the token and returns to the login screen.
 func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
 	clearErr := a.store.ClearToken()
@@ -265,6 +356,8 @@ func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
 		notice = "已退出登录（服务器注销请求失败）"
 	}
 	a.chat = mainWindowModel{}
+	a.contacts = newContactsModel(a.client, "")
+	a.community = newCommunityModel(a.client, "")
 	return a.resetLogin(notice)
 }
 
@@ -275,6 +368,8 @@ func (a *App) handleExpired() tea.Cmd {
 		notice += "（本地登录状态清除失败）"
 	}
 	a.chat = mainWindowModel{}
+	a.contacts = newContactsModel(a.client, "")
+	a.community = newCommunityModel(a.client, "")
 	return a.resetLogin(notice)
 }
 
@@ -295,6 +390,10 @@ func (a *App) View() string {
 		return a.viewSplash()
 	case screenChat:
 		return a.chat.View()
+	case screenContacts:
+		return a.contacts.View()
+	case screenCommunity:
+		return a.community.View()
 	case screenHome:
 		return a.home.View()
 	default:
