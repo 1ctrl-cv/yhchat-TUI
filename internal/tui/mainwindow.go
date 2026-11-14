@@ -64,8 +64,14 @@ type mainWindowModel struct {
 	messages       map[string][]api.Message
 	msgOffset      int
 	msgFollow      bool
+	msgHasMore     map[string]bool
+	loadingOlder   bool
 	pendingText    string
 	lastLoadedChat string
+
+	ws              *api.WSClient
+	wsConnected     bool
+	wsEverConnected bool
 
 	loadingConversations bool
 	loadingMessages      bool
@@ -80,15 +86,16 @@ func newMainWindowModel(client *api.Client, token string, user *api.UserInfo) ma
 	search := newTextInput("search chats", false, 64)
 	message := newTextInput("type a message, Enter to send", false, 2000)
 	m := mainWindowModel{
-		client:    client,
-		token:     token,
-		user:      user,
-		search:    search,
-		input:     message,
-		focus:     focusConversations,
-		messages:  map[string][]api.Message{},
-		spinner:   newSpinner(),
-		msgFollow: true,
+		client:     client,
+		token:      token,
+		user:       user,
+		search:     search,
+		input:      message,
+		focus:      focusConversations,
+		messages:   map[string][]api.Message{},
+		msgHasMore: map[string]bool{},
+		spinner:    newSpinner(),
+		msgFollow:  true,
 	}
 	return m
 }
@@ -135,6 +142,52 @@ func loadMessagesCmd(client *api.Client, token string, conv api.Conversation) te
 		defer cancel()
 		messages, err := client.Messages(ctx, token, conv.ChatID, conv.ChatType, 30, "")
 		return messagesLoadedMsg{chatID: conv.ChatID, chatType: conv.ChatType, messages: messages, err: err}
+	}
+}
+
+// chatHistoryPageSize is the number of messages fetched per history page.
+const chatHistoryPageSize = 30
+
+// loadOlderMessagesCmd fetches history before the given message id.
+func loadOlderMessagesCmd(client *api.Client, token string, conv api.Conversation, beforeMsgID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		messages, err := client.Messages(ctx, token, conv.ChatID, conv.ChatType, chatHistoryPageSize, beforeMsgID)
+		return olderMessagesLoadedMsg{chatID: conv.ChatID, messages: messages, err: err}
+	}
+}
+
+// recallMessagesCmd recalls messages sent by the current account.
+func recallMessagesCmd(client *api.Client, token, chatID string, chatType api.ChatType, msgIDs []string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return messageRecalledMsg{chatID: chatID, msgIDs: msgIDs, err: client.RecallMessages(ctx, token, chatID, chatType, msgIDs...)}
+	}
+}
+
+// dismissNotificationCmd marks a conversation as read on the server.
+func dismissNotificationCmd(client *api.Client, token, chatID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return notificationsDismissedMsg{chatID: chatID, err: client.DismissNotification(ctx, token, chatID)}
+	}
+}
+
+// waitWSEventCmd waits for the next realtime event. A closed channel yields a
+// wsEventMsg with closed=true so the App stops waiting.
+func waitWSEventCmd(ws *api.WSClient) tea.Cmd {
+	if ws == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		event, ok := <-ws.Events()
+		if !ok {
+			return wsEventMsg{closed: true}
+		}
+		return wsEventMsg{event: event}
 	}
 }
 
@@ -192,10 +245,71 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 			return m, m.handleErr(msg.err, "加载消息失败")
 		}
 		m.messages[msg.chatID] = msg.messages
+		m.msgHasMore[msg.chatID] = len(msg.messages) >= chatHistoryPageSize
 		m.lastLoadedChat = msg.chatID
 		m.errText = ""
 		m.msgFollow = true
 		m.msgOffset = 0
+		// Opening a conversation marks it as read.
+		return m, m.markConversationRead(msg.chatID)
+
+	case olderMessagesLoadedMsg:
+		m.loadingOlder = false
+		if msg.err != nil {
+			return m, m.handleErr(msg.err, "加载更早消息失败")
+		}
+		existing := m.messages[msg.chatID]
+		seen := make(map[string]bool, len(existing))
+		for _, message := range existing {
+			seen[message.MsgID] = true
+		}
+		older := make([]api.Message, 0, len(msg.messages))
+		for _, message := range msg.messages {
+			if message.MsgID != "" && seen[message.MsgID] {
+				continue
+			}
+			older = append(older, message)
+		}
+		m.msgHasMore[msg.chatID] = len(msg.messages) >= chatHistoryPageSize
+		if len(older) == 0 {
+			m.msgHasMore[msg.chatID] = false
+			return m, nil
+		}
+		oldLines := len(m.messageLines())
+		m.messages[msg.chatID] = append(older, existing...)
+		newLines := len(m.messageLines())
+		m.msgFollow = false
+		if delta := newLines - oldLines; delta > 0 {
+			m.msgOffset += delta
+		}
+		m.errText = ""
+		return m, nil
+
+	case messageRecalledMsg:
+		if msg.err != nil {
+			m.errText = api.FriendlyMessage(msg.err)
+			return m, nil
+		}
+		ids := make(map[string]bool, len(msg.msgIDs))
+		for _, id := range msg.msgIDs {
+			ids[id] = true
+		}
+		history := m.messages[msg.chatID]
+		for i := range history {
+			if ids[history[i].MsgID] {
+				history[i].Recalled = true
+				history[i].Content = api.MessageContent{}
+			}
+		}
+		m.okText = "消息已撤回"
+		m.errText = ""
+		return m, nil
+
+	case notificationsDismissedMsg:
+		if msg.err != nil && !api.IsSessionExpired(msg.err) {
+			// Not fatal: the badge is already cleared locally.
+			m.errText = api.FriendlyMessage(msg.err)
+		}
 		return m, nil
 
 	case messageSentMsg:
@@ -369,10 +483,16 @@ func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd
 	page := m.messagePageSize()
 	switch key {
 	case "up":
+		if m.atMessageTop() {
+			return m.loadOlderMessages()
+		}
 		m.scrollMessages(-1)
 	case "down":
 		m.scrollMessages(1)
 	case "pgup":
+		if m.atMessageTop() {
+			return m.loadOlderMessages()
+		}
 		m.scrollMessages(-page)
 	case "pgdown":
 		m.scrollMessages(page)
@@ -384,6 +504,8 @@ func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd
 	case "enter":
 		m.setFocus(focusInput)
 		return m, m.applyFocus()
+	case "x":
+		return m.recallLastOwnMessage()
 	case "esc", "left":
 		m.setFocus(focusConversations)
 		return m, m.applyFocus()
@@ -393,6 +515,24 @@ func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd
 			return m, tea.Batch(m.spinner.Tick, loadMessagesCmd(m.client, m.token, *conv))
 		}
 	}
+	return m, nil
+}
+
+// recallLastOwnMessage recalls the newest own, non-recalled message.
+func (m mainWindowModel) recallLastOwnMessage() (mainWindowModel, tea.Cmd) {
+	conv := m.selectedConv()
+	if conv == nil {
+		return m, nil
+	}
+	history := m.messages[conv.ChatID]
+	for i := len(history) - 1; i >= 0; i-- {
+		message := history[i]
+		if message.Recalled || !message.IsOwn() {
+			continue
+		}
+		return m, recallMessagesCmd(m.client, m.token, conv.ChatID, conv.ChatType, []string{message.MsgID})
+	}
+	m.errText = "没有可撤回的自己的消息"
 	return m, nil
 }
 
@@ -518,7 +658,7 @@ func (m *mainWindowModel) ensureMessagesCmd() tea.Cmd {
 		return nil
 	}
 	if _, ok := m.messages[conv.ChatID]; ok {
-		return nil
+		return m.markConversationRead(conv.ChatID)
 	}
 	m.loadingMessages = true
 	return tea.Batch(m.spinner.Tick, loadMessagesCmd(m.client, m.token, *conv))
@@ -591,6 +731,283 @@ func (m *mainWindowModel) appendOwnMessage(chatID, msgID, text string) {
 		}
 	}
 	m.ensureVisibleSelection()
+}
+
+// markConversationRead clears the local unread badge and asks the server to
+// dismiss the notification for that conversation.
+func (m *mainWindowModel) markConversationRead(chatID string) tea.Cmd {
+	for i := range m.conversations {
+		if m.conversations[i].ChatID != chatID {
+			continue
+		}
+		if m.conversations[i].Unread == 0 && !m.conversations[i].At {
+			return nil
+		}
+		m.conversations[i].Unread = 0
+		m.conversations[i].At = false
+		m.applyFilter()
+		return dismissNotificationCmd(m.client, m.token, chatID)
+	}
+	return nil
+}
+
+// loadOlderMessages fetches the previous page of history for the active chat.
+func (m mainWindowModel) loadOlderMessages() (mainWindowModel, tea.Cmd) {
+	conv := m.selectedConv()
+	if conv == nil || m.loadingOlder {
+		return m, nil
+	}
+	if has, ok := m.msgHasMore[conv.ChatID]; ok && !has {
+		return m, nil
+	}
+	messages := m.messages[conv.ChatID]
+	if len(messages) == 0 || messages[0].MsgID == "" {
+		return m, nil
+	}
+	m.loadingOlder = true
+	return m, tea.Batch(m.spinner.Tick, loadOlderMessagesCmd(m.client, m.token, *conv, messages[0].MsgID))
+}
+
+// atMessageTop reports whether the message viewport is scrolled to the top.
+func (m mainWindowModel) atMessageTop() bool {
+	height := m.messageViewportHeight()
+	maxOffset := maxInt(0, len(m.messageLines())-height)
+	offset := m.msgOffset
+	if m.msgFollow {
+		offset = maxOffset
+	}
+	return offset <= 0
+}
+
+// ---------------------------------------------------------------------------
+// realtime events
+
+// handleWSEvent applies one realtime WebSocket event to the chat window.
+func (m mainWindowModel) handleWSEvent(event api.WSEvent) (mainWindowModel, tea.Cmd) {
+	switch event.Kind {
+	case api.WSEventConnected:
+		m.wsConnected = true
+		m.okText = "实时消息已连接"
+		m.errText = ""
+		if !m.wsEverConnected {
+			m.wsEverConnected = true
+			return m, nil
+		}
+		// Reconnected after a drop: resync the list and the open history.
+		var resync []tea.Cmd
+		if len(m.conversations) > 0 {
+			m.loadingConversations = true
+			resync = append(resync, m.spinner.Tick, loadConversationsCmd(m.client, m.token))
+		}
+		if conv := m.selectedConv(); conv != nil {
+			m.loadingMessages = true
+			resync = append(resync, m.spinner.Tick, loadMessagesCmd(m.client, m.token, *conv))
+		}
+		return m, tea.Batch(resync...)
+	case api.WSEventDisconnected:
+		m.wsConnected = false
+		if event.Err != nil {
+			m.okText = "实时连接已断开，正在重连…"
+		} else {
+			m.okText = "实时连接已断开"
+		}
+		return m, nil
+	case api.WSEventPush:
+		if event.Push != nil {
+			return m.applyPush(*event.Push)
+		}
+	case api.WSEventEdit:
+		if event.Push != nil {
+			return m.applyEdit(*event.Push)
+		}
+	case api.WSEventRecall:
+		if event.Recall != nil {
+			return m.applyRecall(*event.Recall)
+		}
+	case api.WSEventStream:
+		if event.Stream != nil {
+			return m.applyStream(event.Stream)
+		}
+	case api.WSEventInviteApply:
+		m.okText = "收到新的好友/群邀请"
+	}
+	return m, nil
+}
+
+// messageFromPush converts a PushMessage into a Message.
+func (m mainWindowModel) messageFromPush(p api.PushMessage) api.Message {
+	direction := "left"
+	if m.user != nil && m.user.Data != nil && p.Sender.ID != "" && p.Sender.ID == m.user.Data.ID {
+		direction = "right"
+	}
+	return api.Message{
+		MsgID:       p.MsgID,
+		Sender:      p.Sender,
+		Direction:   direction,
+		ContentType: p.ContentType,
+		Content:     p.Content,
+		TimestampMs: p.TimestampMs,
+		MsgSeq:      p.MsgSeq,
+		QuoteMsgID:  p.QuoteMsgID,
+		Edited:      p.EditTimestamp > 0,
+	}
+}
+
+// applyPush appends/replaces a pushed message and updates the conversation list.
+func (m *mainWindowModel) applyPush(p api.PushMessage) (mainWindowModel, tea.Cmd) {
+	if p.ChatID == "" {
+		return *m, nil
+	}
+	message := m.messageFromPush(p)
+	own := message.IsOwn()
+
+	// Update the cached history when it was already loaded.
+	if history, loaded := m.messages[p.ChatID]; loaded {
+		replaced := false
+		for i := range history {
+			if history[i].MsgID == message.MsgID {
+				history[i] = message
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			m.messages[p.ChatID] = append(history, message)
+		}
+	}
+
+	active := m.selectedConv() != nil && m.selectedConv().ChatID == p.ChatID
+	selectedBefore := ""
+	if m.selectedConv() != nil {
+		selectedBefore = m.selectedConv().ChatID
+	}
+	index := m.conversationIndex(p.ChatID)
+	var cmds []tea.Cmd
+	if index < 0 {
+		// A message from a conversation we do not know yet: reload the list.
+		cmds = append(cmds, loadConversationsCmd(m.client, m.token))
+		return *m, tea.Batch(cmds...)
+	}
+	conv := m.conversations[index]
+	previousUnread := conv.Unread
+	conv.ChatContent = message.Preview()
+	conv.SendTimestamp = p.TimestampMs / 1000
+	if own || active {
+		conv.Unread = 0
+		conv.At = false
+	} else {
+		conv.Unread++
+	}
+	// Move the conversation to the top of the list.
+	m.conversations = append(m.conversations[:index], m.conversations[index+1:]...)
+	m.conversations = append([]api.Conversation{conv}, m.conversations...)
+	m.applyFilter()
+	if active {
+		for i := range m.filtered {
+			if m.filtered[i].ChatID == p.ChatID {
+				m.selected = i
+				break
+			}
+		}
+		if previousUnread > 0 && !own {
+			cmds = append(cmds, dismissNotificationCmd(m.client, m.token, p.ChatID))
+		}
+	} else if selectedBefore != "" {
+		// Keep the cursor on the previously selected conversation.
+		for i := range m.filtered {
+			if m.filtered[i].ChatID == selectedBefore {
+				m.selected = i
+				break
+			}
+		}
+	}
+	m.ensureVisibleSelection()
+	return *m, tea.Batch(cmds...)
+}
+
+// applyEdit updates an edited message in the cache.
+func (m *mainWindowModel) applyEdit(p api.PushMessage) (mainWindowModel, tea.Cmd) {
+	for chatID, history := range m.messages {
+		for i := range history {
+			if history[i].MsgID != p.MsgID {
+				continue
+			}
+			history[i].Content = p.Content
+			history[i].ContentType = p.ContentType
+			history[i].Edited = true
+			if chatID == p.ChatID {
+				m.updateConversationPreview(chatID, history[i].Preview())
+			}
+			return *m, nil
+		}
+	}
+	return *m, nil
+}
+
+// applyRecall marks messages as recalled.
+func (m *mainWindowModel) applyRecall(recall api.RecallMessage) (mainWindowModel, tea.Cmd) {
+	if recall.ChatID == "" {
+		return *m, nil
+	}
+	ids := make(map[string]bool, len(recall.MsgIDs))
+	for _, id := range recall.MsgIDs {
+		ids[id] = true
+	}
+	history := m.messages[recall.ChatID]
+	anyRecalled := false
+	for i := range history {
+		match := ids[history[i].MsgID]
+		if !match && len(ids) == 0 && recall.MsgSeq > 0 {
+			match = history[i].MsgSeq == recall.MsgSeq
+		}
+		if !match {
+			continue
+		}
+		history[i].Recalled = true
+		history[i].Content = api.MessageContent{}
+		anyRecalled = true
+	}
+	if anyRecalled && len(history) > 0 && ids[history[len(history)-1].MsgID] {
+		m.updateConversationPreview(recall.ChatID, "撤回了一条消息")
+	}
+	return *m, nil
+}
+
+// applyStream appends streamed text to an existing message.
+func (m *mainWindowModel) applyStream(stream *api.StreamMessage) (mainWindowModel, tea.Cmd) {
+	history := m.messages[stream.ChatID]
+	for i := range history {
+		if history[i].MsgID != stream.MsgID {
+			continue
+		}
+		history[i].Content.Text += stream.Content
+		if i == len(history)-1 {
+			m.updateConversationPreview(stream.ChatID, history[i].Preview())
+		}
+		return *m, nil
+	}
+	return *m, nil
+}
+
+// updateConversationPreview updates the latest-message preview of a conversation.
+func (m *mainWindowModel) updateConversationPreview(chatID, preview string) {
+	for i := range m.conversations {
+		if m.conversations[i].ChatID == chatID {
+			m.conversations[i].ChatContent = preview
+			m.applyFilter()
+			return
+		}
+	}
+}
+
+// conversationIndex returns the index of a conversation in the full list.
+func (m mainWindowModel) conversationIndex(chatID string) int {
+	for i := range m.conversations {
+		if m.conversations[i].ChatID == chatID {
+			return i
+		}
+	}
+	return -1
 }
 
 // scrollMessages scrolls the message viewport.
@@ -812,19 +1229,31 @@ func (m mainWindowModel) chatLines(bodyH, width int) []string {
 	lines := make([]string, 0, bodyH)
 
 	// Header.
+	var right []string
+	if m.ws != nil {
+		if m.wsConnected {
+			right = append(right, okStyle.Render("● 实时"))
+		} else {
+			right = append(right, hintStyle.Render("○ 重连中"))
+		}
+	}
 	if conv == nil {
-		lines = append(lines, chatTitleStyle.Render("选择会话开始聊天"))
+		lines = append(lines, composeLeftRight(width,
+			chatTitleStyle.Render("选择会话开始聊天"),
+			strings.Join(right, "  ")))
 	} else {
 		title := chatTitleStyle.Render(truncate(conv.DisplayName(), maxInt(8, width/2)))
 		subtitle := chatSubtitleStyle.Render(conv.ChatType.Label())
 		left := title + "  " + subtitle
-		right := ""
-		if m.loadingMessages {
-			right = lipgloss.JoinHorizontal(lipgloss.Center, m.spinner.View(), " ", hintStyle.Render("加载消息…"))
-		} else if conv.Unread > 0 {
-			right = unreadBadgeStyle.Render(fmt.Sprintf("未读 %d", conv.Unread))
+		switch {
+		case m.loadingMessages:
+			right = append(right, lipgloss.JoinHorizontal(lipgloss.Center, m.spinner.View(), " ", hintStyle.Render("加载消息…")))
+		case m.loadingOlder:
+			right = append(right, lipgloss.JoinHorizontal(lipgloss.Center, m.spinner.View(), " ", hintStyle.Render("加载更早消息…")))
+		case conv.Unread > 0:
+			right = append(right, unreadBadgeStyle.Render(fmt.Sprintf("未读 %d", conv.Unread)))
 		}
-		lines = append(lines, composeLeftRight(width, left, right))
+		lines = append(lines, composeLeftRight(width, left, strings.Join(right, "  ")))
 	}
 	lines = append(lines, separator(width))
 
@@ -912,21 +1341,7 @@ func (m mainWindowModel) messageLines() []string {
 			lines = append(lines, messageNameStyle.Render(header))
 		}
 
-		text := msg.Content.Text
-		if msg.ContentType != api.ContentTypeText && msg.ContentType != 3 && msg.ContentType != 8 {
-			text = msg.Preview()
-		}
-		if strings.TrimSpace(text) == "" {
-			text = msg.Preview()
-		}
-		wrapped := wrapText(strings.TrimSpace(text), textWidth)
-		if len(wrapped) == 0 {
-			wrapped = []string{msg.Preview()}
-		}
-		for i, line := range wrapped {
-			if i > 0 {
-				// keep long messages visually grouped
-			}
+		for _, line := range m.messageBodyLines(msg, textWidth) {
 			if own {
 				lines = append(lines, lipgloss.PlaceHorizontal(width, lipgloss.Right,
 					messageOwnTextSt.Render(line)))
@@ -937,6 +1352,125 @@ func (m mainWindowModel) messageLines() []string {
 		lines = append(lines, "")
 	}
 	return lines
+}
+
+// messageBodyLines renders the body of a message as plain wrapped lines.
+func (m mainWindowModel) messageBodyLines(msg api.Message, width int) []string {
+	var lines []string
+	if quote := strings.TrimSpace(msg.Content.QuoteMsgText); quote != "" {
+		lines = append(lines, "↪ 引用: "+strings.Join(strings.Fields(quote), " "))
+	} else if msg.QuoteMsgID != "" {
+		lines = append(lines, "↪ 引用了一条消息")
+	}
+	switch msg.ContentType {
+	case api.ContentTypeText, 0:
+		lines = append(lines, wrapText(strings.TrimSpace(msg.Content.Text), width)...)
+	case 2: // image
+		meta := "[图片]"
+		if msg.Content.Width > 0 && msg.Content.Height > 0 {
+			meta += fmt.Sprintf(" %dx%d", msg.Content.Width, msg.Content.Height)
+		}
+		if msg.Content.ImageURL != "" {
+			meta += " " + truncate(msg.Content.ImageURL, maxInt(8, width/2))
+		}
+		lines = append(lines, meta)
+	case 3: // markdown
+		if text := strings.TrimSpace(msg.Content.Text); text != "" {
+			lines = append(lines, wrapText(renderInline(text), width)...)
+		}
+	case 4: // file
+		name := strings.TrimSpace(msg.Content.FileName)
+		if name == "" {
+			name = "文件"
+		}
+		meta := "[文件] " + truncate(name, maxInt(8, width/2))
+		if msg.Content.FileSize > 0 {
+			meta += " (" + humanBytes(msg.Content.FileSize) + ")"
+		}
+		lines = append(lines, meta)
+		if msg.Content.FileURL != "" {
+			lines = append(lines, truncate(msg.Content.FileURL, maxInt(8, width)))
+		}
+	case 5:
+		lines = append(lines, "[表单]")
+	case 6: // article card
+		title := strings.TrimSpace(msg.Content.PostTitle)
+		if title == "" {
+			title = "文章"
+		}
+		lines = append(lines, "[文章] "+truncate(title, maxInt(8, width/2)))
+		if content := strings.TrimSpace(msg.Content.PostContent); content != "" {
+			lines = append(lines, wrapText(content, width)...)
+		}
+	case 7:
+		lines = append(lines, "[表情]")
+	case 8: // html
+		text := strings.TrimSpace(stripHTMLTags(msg.Content.Text))
+		if text == "" {
+			text = "[HTML 消息]"
+		}
+		lines = append(lines, wrapText(text, width)...)
+	case 11:
+		meta := "[语音]"
+		if msg.Content.AudioTime > 0 {
+			meta += fmt.Sprintf(" %d 秒", msg.Content.AudioTime)
+		}
+		lines = append(lines, meta)
+	case 12:
+		lines = append(lines, "[视频]")
+	case 13:
+		meta := "[语音通话]"
+		if msg.Content.CallStatus != "" {
+			meta += " " + msg.Content.CallStatus
+		}
+		lines = append(lines, meta)
+	case 14:
+		lines = append(lines, "[卡片消息]")
+	default:
+		preview := msg.Preview()
+		if strings.TrimSpace(preview) == "" {
+			preview = "[消息]"
+		}
+		lines = append(lines, wrapText(preview, width)...)
+	}
+	if tip := strings.TrimSpace(msg.Content.Tip); tip != "" {
+		lines = append(lines, "· "+tip)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, msg.Preview())
+	}
+	return lines
+}
+
+// stripHTMLTags removes HTML tags from a message body.
+func stripHTMLTags(s string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// humanBytes formats a byte count for display.
+func humanBytes(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit && exp < 3; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
 // chatWidth returns the chat panel width.

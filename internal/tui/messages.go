@@ -80,6 +80,32 @@ type chatUserMsg struct {
 	err  error
 }
 
+// wsEventMsg carries one realtime WebSocket event (or the closed signal).
+type wsEventMsg struct {
+	event  api.WSEvent
+	closed bool
+}
+
+// olderMessagesLoadedMsg carries an older page of message history.
+type olderMessagesLoadedMsg struct {
+	chatID   string
+	messages []api.Message
+	err      error
+}
+
+// messageRecalledMsg reports a recall request result.
+type messageRecalledMsg struct {
+	chatID string
+	msgIDs []string
+	err    error
+}
+
+// notificationsDismissedMsg reports a mark-as-read request result.
+type notificationsDismissedMsg struct {
+	chatID string
+	err    error
+}
+
 // openHomeMsg asks the App to show the account ("我的") screen.
 type openHomeMsg struct{}
 

@@ -65,6 +65,15 @@ type testServer struct {
 	editedNickname     string
 	editedAvatar       string
 	friendApplies      []testFriendApply
+	olderRequests      []string // before-msg ids requested for history paging
+	dismissed          []string // conversation ids marked as read
+	recalled           []testRecallRecord
+}
+
+// testRecallRecord records one recall request.
+type testRecallRecord struct {
+	ChatID string
+	MsgIDs []string
 }
 
 // testFriendApply records an add-friend request sent through the mock API.
@@ -387,9 +396,49 @@ func newTestServer(t *testing.T) *testServer {
 	})
 
 	mux.HandleFunc("/v1/conversation/dismiss-notification", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ChatID string `json:"chatId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.dismissed = append(ts.dismissed, payload.ChatID)
+		ts.mu.Unlock()
 		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
 	})
 
+	mux.HandleFunc("/v1/msg/recall-msg", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		record := testRecallRecord{ChatID: string(pbFieldBytes(body, 3))}
+		rest := body
+		for len(rest) > 0 {
+			num, typ, n := protowire.ConsumeTag(rest)
+			if n < 0 {
+				break
+			}
+			rest = rest[n:]
+			if typ == protowire.BytesType {
+				value, m := protowire.ConsumeBytes(rest)
+				if m < 0 {
+					break
+				}
+				if num == 2 {
+					record.MsgIDs = append(record.MsgIDs, string(value))
+				}
+				rest = rest[m:]
+				continue
+			}
+			m := protowire.ConsumeFieldValue(num, typ, rest)
+			if m < 0 {
+				break
+			}
+			rest = rest[m:]
+		}
+		ts.mu.Lock()
+		ts.recalled = append(ts.recalled, record)
+		ts.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(testStatusResponseProto(1, "success"))
+	})
 	mux.HandleFunc("/v1/msg/list-message", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("token") != testToken {
 			writeTestJSON(w, map[string]any{"code": -101, "msg": "未登录"})
@@ -397,7 +446,15 @@ func newTestServer(t *testing.T) *testServer {
 		}
 		body, _ := io.ReadAll(r.Body)
 		chatID := string(pbFieldBytes(body, 5))
+		before := string(pbFieldBytes(body, 3))
 		w.Header().Set("Content-Type", "application/x-protobuf")
+		if before != "" {
+			ts.mu.Lock()
+			ts.olderRequests = append(ts.olderRequests, before)
+			ts.mu.Unlock()
+			_, _ = w.Write(testOlderListMsgResponseProto(chatID))
+			return
+		}
 		_, _ = w.Write(testListMsgResponseProto(chatID))
 	})
 
@@ -445,6 +502,7 @@ func newTestApp(t *testing.T, ts *testServer) (*App, *config.Store) {
 	client.HTTP = &http.Client{Timeout: 5 * time.Second}
 
 	app := New(client, store)
+	app.wsEnabled = false // tests never open a real WebSocket connection
 	app.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
 	return app, store
 }
@@ -938,4 +996,19 @@ func switchToSection(t *testing.T, app *App, to section) {
 	t.Helper()
 	_, cmd := app.Update(switchSectionMsg{to: to})
 	applyAll(t, app, cmd)
+}
+
+// testOlderListMsgResponseProto builds one older page of history.
+func testOlderListMsgResponseProto(chatID string) []byte {
+	messages := [][]byte{
+		testMsgProto("old-1", testUserChatID, 1, "小明", "left", 1, "更早的消息一", 1709998001000, 1, 0),
+		testMsgProto("old-2", testUserID, 1, testName, "right", 1, "更早的消息二", 1709998002000, 2, 0),
+	}
+	var out []byte
+	out = pbBytes(out, 1, testPBStatus(1, "success"))
+	for _, message := range messages {
+		out = pbBytes(out, 2, message)
+	}
+	out = pbVarint(out, 3, uint64(len(messages)))
+	return out
 }

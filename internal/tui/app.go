@@ -40,15 +40,20 @@ type App struct {
 	community communityModel
 
 	spinner spinner.Model
+
+	// Realtime (WebSocket) connection, owned by the App and shared with chat.
+	ws        *api.WSClient
+	wsEnabled bool
 }
 
 // New creates the root model.
 func New(client *api.Client, store *config.Store) *App {
 	app := &App{
-		client:  client,
-		store:   store,
-		screen:  screenLogin,
-		spinner: newSpinner(),
+		client:    client,
+		store:     store,
+		screen:    screenLogin,
+		spinner:   newSpinner(),
+		wsEnabled: true,
 	}
 	app.login = newLoginModel(client, store.Data)
 	app.home = newHomeModel(client, store.Data.Token)
@@ -166,13 +171,28 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.home, cmd = a.home.Update(msg)
 		return a, cmd
 
-	case conversationsLoadedMsg, messagesLoadedMsg, messageSentMsg, chatUserMsg:
+	case conversationsLoadedMsg, messagesLoadedMsg, olderMessagesLoadedMsg,
+		messageSentMsg, chatUserMsg, notificationsDismissedMsg:
 		if a.screen != screenChat {
 			return a, nil
 		}
 		var cmd tea.Cmd
 		a.chat, cmd = a.chat.Update(msg)
 		return a, cmd
+
+	case wsEventMsg:
+		if msg.closed {
+			a.ws = nil
+			a.chat.ws = nil
+			a.chat.wsConnected = false
+			return a, nil
+		}
+		var cmd tea.Cmd
+		a.chat, cmd = a.chat.handleWSEvent(msg.event)
+		if a.ws == nil {
+			return a, cmd
+		}
+		return a, tea.Batch(cmd, waitWSEventCmd(a.ws))
 
 	default:
 		return a.route(msg)
@@ -267,6 +287,7 @@ func (a *App) prepareHome(user *api.UserInfo, okText string) {
 // startChat creates the main window for the current token and starts loading
 // the conversation list.
 func (a *App) startChat(user *api.UserInfo) tea.Cmd {
+	a.stopWS()
 	a.chat = newMainWindowModel(a.client, a.store.Data.Token, user).resize(a.width, a.height)
 	a.screen = screenChat
 	var cmd tea.Cmd
@@ -274,7 +295,34 @@ func (a *App) startChat(user *api.UserInfo) tea.Cmd {
 	if user == nil {
 		cmd = tea.Batch(cmd, fetchChatUserCmd(a.client, a.store.Data.Token))
 	}
-	return cmd
+	return tea.Batch(cmd, a.startWS())
+}
+
+// startWS opens the realtime connection for the logged-in account.
+func (a *App) startWS() tea.Cmd {
+	if !a.wsEnabled || a.store.Data.Token == "" || a.chat.user == nil || a.chat.user.Data == nil {
+		return nil
+	}
+	ws := api.NewWSClient(a.client.BaseURL, api.WSLoginInfo{
+		UserID:   a.chat.user.Data.ID,
+		Token:    a.store.Data.Token,
+		Platform: a.client.Platform,
+		DeviceID: a.client.DeviceID,
+	})
+	a.ws = ws
+	a.chat.ws = ws
+	ws.Start()
+	return waitWSEventCmd(ws)
+}
+
+// stopWS closes the realtime connection.
+func (a *App) stopWS() {
+	if a.ws != nil {
+		a.ws.Close()
+		a.ws = nil
+	}
+	a.chat.ws = nil
+	a.chat.wsConnected = false
 }
 
 // showHome switches to the account ("我的") screen.
@@ -356,6 +404,7 @@ func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
 	case msg.err != nil && !api.IsSessionExpired(msg.err):
 		notice = "已退出登录（服务器注销请求失败）"
 	}
+	a.stopWS()
 	a.chat = mainWindowModel{}
 	a.contacts = newContactsModel(a.client, "")
 	a.community = newCommunityModel(a.client, "")
@@ -368,6 +417,7 @@ func (a *App) handleExpired() tea.Cmd {
 	if clearErr := a.store.ClearToken(); clearErr != nil {
 		notice += "（本地登录状态清除失败）"
 	}
+	a.stopWS()
 	a.chat = mainWindowModel{}
 	a.contacts = newContactsModel(a.client, "")
 	a.community = newCommunityModel(a.client, "")

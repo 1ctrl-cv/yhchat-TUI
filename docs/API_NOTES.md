@@ -201,3 +201,32 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 - **获取个人资料** `POST /v1/user/get-user-data`：JSON，响应 `data.data`（userId/introduction/gender/birthday/province/city/district/locationCode/lastLoginTime/update_time）。
 - **保存个人资料** `POST /v1/user/save-user-data`：JSON（当前 TUI 只读展示，接口已封装）。
 - **添加好友/群/机器人** `POST /v1/friend/apply`：JSON `{chatId,chatType,remark}`（chatType 1/2/3）。
+
+## 实时消息（WebSocket）
+
+- 地址：`wss://chat-ws-go.jwzhd.com/ws`。连接后先发送 JSON 登录：
+
+```json
+{"seq":"<随机>","cmd":"login","data":{"userId":"<ID>","token":"<token>","platform":"windows","deviceId":"<设备ID>"}}
+```
+
+- 之后每 25 秒发送 `{"seq":"...","cmd":"heartbeat","data":{}}`，服务端回 `heartbeat_ack`。
+- 服务端推送为 **二进制 protobuf**，外层 `WsWrapper{ info=1 (WsInfo{seq=1,cmd=2}), data=2 (google.protobuf.Any{type_url=1,value=2}) }`；
+  按 `info.cmd` 分发，`Any.value` 为对应消息体：
+  - `push_message` / `edit_message` / `blocked_message`：`PushMessage{msg_id=1,sender=2,recv_id=3,chat_id=4,chat_type=5,content=6,content_type=7,timestamp=8,cmd=9,delete_timestamp=10,quote_msg_id=11,msg_seq=12,edit_timestamp=14}`；
+    `delete_timestamp>0` 视为撤回。
+  - `stream_message`：`StreamMessage{msg_id=1,recv_id=2,chat_id=3,content=4}`，需要把 content 追加到最后一条消息。
+  - `recall` 类命令名未在上游文档中写明（客户端兼容 cmd 含 recall/revoke 的情况，并同时兼容 `RecallMsg` 与稀疏 `PushMessage` 两种载荷）。
+  - 其它已知：`heartbeat_ack`、`invite_apply`、`live_video_user_hang_up`（语音房间）。
+- 登录失败/未登录时服务端可能返回文本帧（如“数据不合法”）后断开；客户端忽略文本帧并按退避重连（1s→2s→…→30s）。
+- 实测（2026-11-14）：真实账号可以完成握手、登录并保持心跳；探测窗口内服务端没有主动推送消息。
+
+## 历史分页
+
+- `POST /v1/msg/list-message` 的 `msg_id` 表示“列出该消息**之前**的消息”（不含指定消息）。
+- 实测：最新一页 seq 32751–32780，再以 `msg_id`=最旧消息取上一页得到 seq 32721–32750，顺序正确。
+- 客户端每页取 30 条，消息区滚动到顶后继续上翻加载更早消息并保持阅读位置。
+
+## 撤回消息
+
+- `POST /v1/msg/recall-msg`，请求 protobuf `RecallMsg{ msg_id=2 (repeated), chat_id=3, chat_type=4 }`，响应 `StatusResponse`。
