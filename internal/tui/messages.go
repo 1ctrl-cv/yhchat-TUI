@@ -106,6 +106,14 @@ type notificationsDismissedMsg struct {
 	err    error
 }
 
+// openContactChatMsg asks the App to open a chat with a contact/group/bot.
+type openContactChatMsg struct {
+	chatID    string
+	chatType  api.ChatType
+	name      string
+	avatarURL string
+}
+
 // openHomeMsg asks the App to show the account ("我的") screen.
 type openHomeMsg struct{}
 

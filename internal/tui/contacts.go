@@ -257,6 +257,19 @@ func (m contactsModel) handleKey(msg tea.KeyMsg) (contactsModel, tea.Cmd) {
 		m.ensureVisible()
 		return m, nil
 	case "enter", "right":
+		row := m.selectedRow()
+		if row == nil {
+			return m, nil
+		}
+		if row.kind == contactRowContact {
+			chatID := row.contact.ID
+			chatType := row.chatType
+			name := row.contact.DisplayName()
+			avatarURL := row.contact.AvatarURL
+			return m, func() tea.Msg {
+				return openContactChatMsg{chatID: chatID, chatType: chatType, name: name, avatarURL: avatarURL}
+			}
+		}
 		m.toggleRow()
 		return m, nil
 	case "left":
@@ -556,15 +569,15 @@ func (m contactsModel) detailColumn(bodyH, width int) []string {
 		return padLines(lines, bodyH, width)
 	}
 
+	button := ""
 	switch row.kind {
 	case contactRowHeader:
-		lines = append(lines, titleAccentStyle.Render(row.label), "")
-		lines = append(lines, m.detailRow(width, "条目数", fmt.Sprintf("%d", row.count)))
-		if row.chatType != api.ChatTypeUnknown {
-			lines = append(lines, m.detailRow(width, "类型", row.chatType.Label()))
+		// A collapsed section has no detail page of its own; the right pane
+		// stays empty until an actual entry is selected.
+		if !row.expanded {
+			return padLines(nil, bodyH, width)
 		}
-		lines = append(lines, "")
-		lines = append(lines, hintStyle.Render(" 按 Enter 展开/收起该分组"))
+		lines = append(lines, "", hintStyle.Render(" 从下方选择条目查看主页"))
 	case contactRowContact:
 		contact := row.contact
 		lines = append(lines, titleAccentStyle.Render(contact.DisplayName()), "")
@@ -589,7 +602,7 @@ func (m contactsModel) detailColumn(bodyH, width int) []string {
 		if contact.AvatarURL != "" {
 			lines = append(lines, "", hintStyle.Render(" 头像: "+truncate(contact.AvatarURL, maxInt(8, width-8))))
 		}
-		lines = append(lines, "", hintStyle.Render(" 提示：聊天列表中的会话可开始聊天"))
+		button = buttonFocusedStyle.Render("进入聊天")
 	case contactRowRequest:
 		request := row.request
 		lines = append(lines, titleAccentStyle.Render("申请 / 邀请"), "")
@@ -619,7 +632,17 @@ func (m contactsModel) detailColumn(bodyH, width int) []string {
 		lines = append(lines, m.detailRow(width, "状态", status))
 		lines = append(lines, "", hintStyle.Render(" 处理申请将在后续版本支持"))
 	}
-	return padLines(lines, bodyH, width)
+	if button == "" {
+		return padLines(lines, bodyH, width)
+	}
+	// Pin the "enter chat" button to the bottom of the detail pane.
+	buttonLines := strings.Split(button, "\n")
+	contentH := maxInt(1, bodyH-len(buttonLines))
+	out := padLines(lines, contentH, width)
+	for _, line := range buttonLines {
+		out = append(out, padLine("  "+line, width))
+	}
+	return out
 }
 
 // detailRow renders a label/value pair inside the detail pane.
@@ -633,6 +656,9 @@ func (m contactsModel) detailRow(width int, label, value string) string {
 func (m contactsModel) viewHints() string {
 	if m.focus == contactsSidebar {
 		return sidebarHint()
+	}
+	if row := m.selectedRow(); row != nil && row.kind == contactRowContact {
+		return "↑↓ 选择 · Enter 进入聊天 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"
 	}
 	return "↑↓ 选择 · Enter 展开/收起 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"
 }

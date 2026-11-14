@@ -128,6 +128,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openChatMsg:
 		return a, a.showChat()
 
+	case openContactChatMsg:
+		return a, a.openContactChat(msg)
+
 	case switchSectionMsg:
 		return a, a.switchSection(msg.to)
 
@@ -392,6 +395,22 @@ func (a *App) switchSection(to section) tea.Cmd {
 		return a.showHome()
 	}
 	return nil
+}
+
+// openContactChat switches to the chat window and opens the requested contact.
+func (a *App) openContactChat(msg openContactChatMsg) tea.Cmd {
+	if a.store.Data.Token == "" || msg.chatID == "" {
+		return nil
+	}
+	var cmds []tea.Cmd
+	if a.chat.token != a.store.Data.Token {
+		cmds = append(cmds, a.startChat(a.chat.user))
+	}
+	a.screen = screenChat
+	updated, cmd := a.chat.openConversation(msg.chatID, msg.chatType, msg.name, msg.avatarURL)
+	a.chat = updated
+	cmds = append(cmds, cmd)
+	return tea.Batch(cmds...)
 }
 
 // handleLogoutDone clears the token and returns to the login screen.

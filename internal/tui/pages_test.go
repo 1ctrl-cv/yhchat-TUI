@@ -264,3 +264,53 @@ func TestProfileUserDataAndSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestContactsEnterChat(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	switchToSection(t, app, sectionContacts)
+
+	// Expand 用户 and select 小明 (an existing conversation).
+	sendKey(t, app, tea.KeyDown)
+	sendKey(t, app, tea.KeyEnter)
+	sendKey(t, app, tea.KeyDown)
+	cmd := sendKey(t, app, tea.KeyEnter)
+	if cmd == nil {
+		t.Fatal("Enter on a contact should emit an open-chat message")
+	}
+	applyAll(t, app, cmd)
+	if app.screen != screenChat {
+		t.Fatalf("screen = %v, want chat", app.screen)
+	}
+	selected := app.chat.selectedConv()
+	if selected == nil || selected.ChatID != testUserChatID {
+		t.Fatalf("selected conversation = %+v", selected)
+	}
+	if app.chat.focus != focusInput {
+		t.Fatalf("focus = %v, want input", app.chat.focus)
+	}
+	if !strings.Contains(app.View(), "小明") {
+		t.Fatalf("chat view does not show the opened contact\n%s", app.View())
+	}
+
+	// A contact without an existing conversation gets a local entry so the
+	// user can start chatting immediately.
+	switchToSection(t, app, sectionContacts)
+	// Collapse 用户, then expand 机器人.
+	sendKey(t, app, tea.KeyUp)
+	sendKey(t, app, tea.KeyEnter)
+	for i := 0; i < 3; i++ {
+		sendKey(t, app, tea.KeyDown)
+	}
+	sendKey(t, app, tea.KeyEnter)
+	sendKey(t, app, tea.KeyDown)
+	cmd = sendKey(t, app, tea.KeyEnter)
+	applyAll(t, app, cmd)
+	if app.screen != screenChat {
+		t.Fatalf("screen = %v, want chat", app.screen)
+	}
+	if conv := app.chat.selectedConv(); conv == nil || conv.ChatID != "4001" {
+		t.Fatalf("synthetic conversation = %+v", conv)
+	}
+}

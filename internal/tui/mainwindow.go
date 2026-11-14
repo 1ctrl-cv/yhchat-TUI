@@ -733,6 +733,54 @@ func (m *mainWindowModel) appendOwnMessage(chatID, msgID, text string) {
 	m.ensureVisibleSelection()
 }
 
+// openConversation selects a conversation by chat id (creating a local entry
+// when it does not exist yet), loads its history and focuses the input box.
+func (m mainWindowModel) openConversation(chatID string, chatType api.ChatType, name, avatarURL string) (mainWindowModel, tea.Cmd) {
+	if chatID == "" {
+		return m, nil
+	}
+	m.search.SetValue("")
+	m.applyFilter()
+	index := -1
+	for i := range m.filtered {
+		if m.filtered[i].ChatID == chatID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		now := timeNow()
+		conv := api.Conversation{
+			ChatID:        chatID,
+			ChatType:      chatType,
+			Name:          name,
+			AvatarURL:     avatarURL,
+			TimestampMs:   uint64(now.UnixMilli()),
+			SendTimestamp: uint64(now.Unix()),
+		}
+		m.conversations = append([]api.Conversation{conv}, m.conversations...)
+		m.applyFilter()
+		for i := range m.filtered {
+			if m.filtered[i].ChatID == chatID {
+				index = i
+				break
+			}
+		}
+	}
+	if index >= 0 {
+		m.selected = index
+		m.ensureVisibleSelection()
+	}
+	m.setFocus(focusInput)
+	m.errText = ""
+	var cmds []tea.Cmd
+	if cmd := m.ensureMessagesCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	cmds = append(cmds, m.applyFocus())
+	return m, tea.Batch(cmds...)
+}
+
 // markConversationRead clears the local unread badge and asks the server to
 // dismiss the notification for that conversation.
 func (m *mainWindowModel) markConversationRead(chatID string) tea.Cmd {
