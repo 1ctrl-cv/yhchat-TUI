@@ -86,6 +86,8 @@ vendor/                      依赖（提交进仓库，离线构建）
 
 ## Git 约定
 
+- 本仓库的提交身份通过仓库本地配置指定：`DeepSeek Harness Agent <agent@localhost>`（AI 代理身份）；
+  用户手动提交的 commit 保留其本人身份，不要改写。
 - 每个可工作的里程碑提交一次，提交信息使用英文 Conventional Commits：`feat:` / `fix:` / `docs:` / `test:` / `build:` / `chore:`。
 - 提交前确认 `git status` 中只包含本次改动的文件；不要提交构建产物、临时探针、截图中间文件。
 - 不强制 GPG 签名；在本仓库可用 `git -c commit.gpgsign=false commit --no-gpg-sign`。
@@ -95,6 +97,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 上游 API 文档：`../yhchatAPI/src/api/v1/*.md`、`../yhchatAPI/src/full.proto`、`../yhchatAPI/src/api/wss/`
 - 本项目 API 实测记录：[`docs/API_NOTES.md`](docs/API_NOTES.md)
 - 登录里程碑独立验收报告：[`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+
 
 
 
