@@ -137,32 +137,19 @@ yhchat-tui [-config FILE] [-server URL] [-version]
 
 ## 配置文件
 
+配置文件固定放在**用户主文件夹**下的隐藏目录：
+
 | 平台 | 位置 |
 | --- | --- |
-| Windows | `%AppData%\yhchat-tui\config.json` |
-| Linux | `$XDG_CONFIG_HOME/yhchat-tui/config.json`（默认 `~/.config/yhchat-tui/config.json`） |
+| Windows | `%USERPROFILE%\.yhchat-tui\config.json`（如 `C:\Users\Admin\.yhchat-tui\config.json`） |
+| Linux / macOS | `~/.yhchat-tui/config.json` |
 
+- 旧版本位置（`%AppData%\yhchat-tui\config.json` / `$XDG_CONFIG_HOME/yhchat-tui/config.json`）
+  中的配置会在首次启动时自动迁移到新位置。
 - 文件权限 `0600`（Windows 由用户目录 ACL 保护）
 - 保存登录 token、设备 ID（`deviceId`，登录设备标识）和上次使用的邮箱/手机号
 - token 不会出现在界面或日志中；如需退出登录请使用主页的 `l`，或删除该文件
 
-## 无账号体验 / 联调
-
-仓库内含一个本地 mock API，可在没有云湖账号时体验完整登录流程：
-
-```bash
-# 终端 1：启动 mock 服务（监听 127.0.0.1:18080）
-go run ./tools/mockapi
-
-# 终端 2：让 TUI 指向 mock 服务
-go run . -server http://127.0.0.1:18080 -config ./demo-config.json
-```
-
-mock 账号：
-
-- 邮箱登录：`demo@yunhu.chat` / `demo1234`
-- 短信登录：任意 11 位手机号，短信验证码 `123456`；图形验证码内容任意填写即可
-- 主窗口自带 4 个演示会话与历史消息，`Enter` 打开会话、在输入框发送消息都会写入 mock 内存（重启 mock 后重置）
 
 ## 测试
 
@@ -177,7 +164,7 @@ go vet ./...
 - protobuf 解码：真实抓包 fixture、未知字段、截断/随机字节不 panic
 - 验证码渲染：真实图片 fixture、尺寸预算、彩色/灰度两条路径
 - 配置读写：设备 ID 生成、原子写入、损坏配置备份
-- TUI：完整邮箱/短信登录流程、自动登录、过期、退出、表单校验、快捷键、多终端尺寸布局
+- TUI：完整邮箱/短信登录流程、自动登录、过期、退出、表单校验、快捷键、多终端尺寸布局（测试内置 httptest mock 服务，不访问真实云湖）
 - 主窗口：会话列表加载、会话切换与消息加载、发送消息/失败回填、搜索过滤、侧边栏切换、焦点循环、会话过期回登录
 - `internal/tui/testdata/snapshots/` 保存了各页面在纯文本下的渲染快照（`UPDATE_SNAPSHOTS=1 go test ./internal/tui` 可更新）
 
@@ -190,7 +177,6 @@ internal/config/           token / 设备 ID 持久化
 internal/tui/              登录页、主窗口（会话+聊天）、账号页、根模型、样式
 internal/captchaimg/       图形验证码 → 终端 ANSI 半块字符渲染
 internal/captchaimg/testdata/captcha.png   真实验证码测试图
-tools/mockapi/             本地 mock API（登录 / 会话列表 / 消息历史 / 发送，演示可玩主窗口）
 tools/build/               跨平台全量构建器（检查、测试、交叉编译，只产出可执行文件）
 docs/API_NOTES.md          本项目实际调用的 API 实测记录
 docs/VERIFICATION.md       独立验收报告（构建 / API 契约 / 安全 / TUI 检查，结论 PASS）
@@ -215,5 +201,6 @@ vendor/                    依赖（离线构建）
 
 本项目为第三方非官方实现，与云湖官方无关。API 属于公开文档记录的接口，可能随时变更；
 请勿将本项目用于违反服务条款的用途，并妥善保管自己的账号凭据与 token。
+
 
 

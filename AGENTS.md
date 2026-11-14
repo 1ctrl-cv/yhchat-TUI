@@ -8,7 +8,7 @@
 
 当前里程碑：
 
-- **已完成**：登录（邮箱密码 / 短信验证码 + 终端内图片验证码渲染）、自动登录、主窗口（侧边栏 + 会话搜索 + 会话列表 + 消息历史 + 发送文本）、账号信息页、退出登录、本地 mock API、全量构建脚本。
+- **已完成**：登录（邮箱密码 / 短信验证码 + 终端内图片验证码渲染）、自动登录、主窗口（侧边栏 + 会话搜索 + 会话列表 + 消息历史 + 发送文本）、账号信息页、退出登录、全量构建脚本。
 - **下一阶段**：WebSocket 实时消息（`wss://chat-ws-go.jwzhd.com/ws`）、更多消息类型、历史分页。
 
 API 依据公开文档仓库 [`../yhchatAPI`](../yhchatAPI) 实现；本仓库的实际调用/实测记录见 [`docs/API_NOTES.md`](docs/API_NOTES.md)。
@@ -39,18 +39,15 @@ pwsh -File scripts\build.ps1          # Windows
 $env:UPDATE_SNAPSHOTS="1"; go test ./internal/tui -run TestViewSnapshots -count=1; Remove-Item Env:UPDATE_SNAPSHOTS
 ```
 
-- 本地 mock 联调：`go run ./tools/mockapi`，然后另一个终端 `go run . -server http://127.0.0.1:18080`
-  （邮箱 `demo@yunhu.chat` / `demo1234`，短信码 `123456`）。
 
 ## 目录结构
 
 ```
 main.go                      入口：flag 解析 + tea 程序启动
 internal/api/                HTTP 客户端：登录、会话列表、消息历史、发送（protobuf）
-internal/config/             token / 设备 ID 持久化（平台配置目录）
+internal/config/             token / 设备 ID 持久化（`~/.yhchat-tui/config.json`）
 internal/tui/                所有界面：app 根模型、登录页、主窗口、账号页、样式、快照测试
 internal/captchaimg/         图形验证码 → ANSI 半块字符渲染（含真实图片 fixture）
-tools/mockapi/               本地 mock API（登录 + 会话/消息，可演示主窗口）
 tools/build/                 跨平台全量构建器（被 scripts/build.* 调用）
 docs/API_NOTES.md            实际调用的 API 实测记录（协议字段、实测响应）
 docs/VERIFICATION.md         独立验收报告（登录里程碑）
@@ -80,7 +77,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 ## 安全
 
 - 不提交 token/密码/个人配置；`dist/`、`.gopath/`、`.gocache/`、`.gomodcache/`、`_tools/` 已在 `.gitignore`。
-- 运行时 token 只保存在本机配置目录（0600），不打印到 UI/日志。
+- 运行时 token 只保存在 `~/.yhchat-tui/config.json`（0600；Windows 为 `%USERPROFILE%\.yhchat-tui\config.json`），不打印到 UI/日志。
 - 不要把用户的真实 token 硬编码进源码或测试。
 
 ## Git 约定
@@ -94,4 +91,5 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 上游 API 文档：`../yhchatAPI/src/api/v1/*.md`、`../yhchatAPI/src/full.proto`、`../yhchatAPI/src/api/wss/`
 - 本项目 API 实测记录：[`docs/API_NOTES.md`](docs/API_NOTES.md)
 - 登录里程碑独立验收报告：[`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+
 
