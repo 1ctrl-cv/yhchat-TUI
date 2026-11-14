@@ -109,3 +109,56 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 ```
 
 允许的 platform：`windows`,`macos`,`android`,`linux`,`ios`,`fuchsia`,`Web`（大小写敏感）。
+
+## 会话 / 消息接口（主窗口使用）
+
+参考文档：`src/api/v1/conversation.md`、`src/api/v1/msg.md`、`src/full.proto`
+（`ConversationListRequest/Response`、`ListMsgRequest/Response`、`SendMsgRequest`）。
+
+### POST /v1/conversation/list —— 获取会话列表
+
+- 请求头 `token`，请求体为 protobuf `ConversationListRequest { string md5 = 2; }`
+  （客户端首次请求发空 md5 即可；md5 与服务端一致时服务端返回空列表）。
+- 响应为 protobuf `ConversationListResponse`：
+  - `status = 1`，`data = 2`（repeated），`total = 3`，`md5 = 4`
+  - Data 字段：`chat_id=1`、`chat_type=2`（1 用户 / 2 群聊 / 3 机器人）、
+    `remark=3`、`chat_content=4`（最新消息，通常为 JSON）、`timestamp_ms=5`、
+    `unread_msg=6`、`at=7`、`avatar_id=8`、`avatar_url=9`、`do_not_disturb=11`、
+    `send_timestamp=12`（秒）、`is_vip=13`、`at_data=14`、`name=15`、`certification_level=16`。
+- 实测（无效 token）：HTTP 200 + `application/x-protobuf`，内容为
+  `Status{code=2, msg="未登录，请登录"}`；不带 token 请求头时返回 JSON
+  `{"code":-101,"msg":"未登录"}`。请求的 `Content-Type` 服务端未严格校验，
+  客户端使用 `application/x-protobuf`。
+
+### POST /v1/msg/list-message —— 列出消息
+
+- 请求体 protobuf `ListMsgRequest { int32 msg_count = 2; string msg_id = 3;
+  ChatType chat_type = 4; string chat_id = 5; }`（`msg_id` 为空时取最近消息）。
+- 响应 protobuf `ListMsgResponse`：`status=1`、`data=2`（repeated MsgData）、`total=3`。
+  MsgData 字段：`msg_id=1`、`sender=2`、`direction=3`（left/right）、`content_type=4`、
+  `content=5`（MsgContent）、`send_timestamp_ms=6`、`cmd=7`、`recall_timestamp=8`、
+  `quote_msg_id=9`、`msg_seq=10`、`edit_timestamp=12`。
+  Sender 字段：`chat_id=1`、`chat_type=2`、`name=3`、`avatar_url=4`、`is_vip=5`。
+- 实测（无效 token）同上，返回 protobuf 未登录状态。客户端按 `msg_seq` 升序排序后渲染。
+
+### POST /v1/msg/send-message —— 发送消息
+
+- 请求体 protobuf `SendMsgRequest { string msg_id = 2; string chat_id = 3;
+  ChatType chat_type = 4; MsgContent content = 5; ContentType content_type = 6; ... }`，
+  文本消息：`content.text=1`、`content_type=1`，`msg_id` 使用 32 位 hex（等价
+  `uuid4().hex`）。
+- 响应 protobuf `StatusResponse { Status status = 1; }`，`status.code==1` 为成功。
+- 实测（无效 token）返回 protobuf 未登录状态，说明请求类型解析正确。
+
+### POST /v1/conversation/dismiss-notification —— 会话标记已读
+
+- 请求头 `token`，JSON 请求体 `{"chatId":"..."}`，响应 JSON `{"code":1,"msg":"success"}`。
+
+### WebSocket（尚未接入，下一阶段）
+
+`wss://chat-ws-go.jwzhd.com/ws`：连接后发送 JSON
+`{"seq":"...","cmd":"login","data":{"userId":"...","token":"...","platform":"windows","deviceId":"..."}}`，
+随后周期性发送 `heartbeat`。服务端推送为 protobuf `WsWrapper`：
+`info=1`（`WsInfo{seq=1,cmd=2}`）+ `data=2`（`google.protobuf.Any`）；按 `info.cmd`
+（`push_message` / `edit_message` / `recalled` / `heartbeat_ack` …）解析 Any 的
+`value` 字段即可（`type_url` 不可靠，建议按 cmd 分发）。

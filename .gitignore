@@ -18,3 +18,9 @@ _tools/
 Thumbs.db
 .idea/
 .vscode/
+
+# Generated screenshot intermediates (assets/screenshots is committed)
+_tools/
+internal/tui/testdata/screens/
+_e2e/
+
