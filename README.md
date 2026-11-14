@@ -139,6 +139,7 @@ internal/captchaimg/       图形验证码 → 终端 ANSI 半块字符渲染
 internal/captchaimg/testdata/captcha.png   真实验证码测试图
 tools/mockapi/             本地 mock API（演示 / 联调 / 测试）
 docs/API_NOTES.md          本项目实际调用的 API 实测记录
+docs/VERIFICATION.md       独立验收报告（构建 / API 契约 / 安全 / TUI 检查，结论 PASS）
 scripts/build.ps1          交叉编译脚本
 scripts/env.ps1            沙箱开发环境变量（仅开发会话需要）
 vendor/                    依赖（离线构建）
