@@ -341,19 +341,12 @@ func checkFormatting(goBin string) error {
 // defaultTargets are all common Windows/Linux architectures.
 func defaultTargets() []target {
 	return []target{
-		// Windows
 		{OS: "windows", Arch: "386"},
 		{OS: "windows", Arch: "amd64"},
 		{OS: "windows", Arch: "arm64"},
 
-		// MacOS
-		{OS: "darwin", Arch: "amd64"},
-		{OS: "darwin", Arch: "arm64"},
-
-		// Linux
 		{OS: "linux", Arch: "386"},
 		{OS: "linux", Arch: "amd64"},
-		{OS: "linux", Arch: "arm", GOARM: "6"},
 		{OS: "linux", Arch: "arm", GOARM: "7"},
 		{OS: "linux", Arch: "arm64"},
 		{OS: "linux", Arch: "loong64"},
