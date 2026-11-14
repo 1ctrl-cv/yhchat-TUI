@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -246,24 +245,18 @@ func (a *App) View() string {
 	}
 }
 
-// viewSplash shows the startup token validation screen.
+// viewSplash shows the startup token validation screen. It uses the same
+// full-terminal chrome as the other screens.
 func (a *App) viewSplash() string {
-	width, height := a.width, a.height
-	if width <= 0 {
-		width = 80
-	}
-	if height <= 0 {
-		height = 24
-	}
-	title := titleAccentStyle.Render("◈ 云湖 TUI")
+	width, height := screenSize(a.width, a.height)
+	inner := width - 2*chromePadX
 	loading := lipgloss.JoinHorizontal(lipgloss.Center,
 		a.spinner.View(), " ", hintStyle.Render("正在验证登录状态…"))
-	block := lipgloss.JoinVertical(lipgloss.Center,
-		title,
-		"",
-		loading,
-		"",
-		hintStyle.Render(fmt.Sprintf("yhchat-tui v%s · Ctrl+C 退出", Version)),
+	body := []string{lipgloss.PlaceHorizontal(inner, lipgloss.Center, loading)}
+	return screenChrome(width, height,
+		titleAccentStyle.Render("▌ 云湖 TUI"),
+		subtitleStyle.Render("Yunhu Chat · TUI"),
+		body,
+		"Ctrl+C 退出",
 	)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block)
 }

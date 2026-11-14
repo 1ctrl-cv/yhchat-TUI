@@ -35,25 +35,13 @@ var (
 
 	subtitleStyle = lipgloss.NewStyle().Foreground(colorMuted)
 
-	cardStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder).
-			Padding(1, 2)
-
-	// compactCardStyle is cardStyle without the vertical breathing room, used
-	// on short terminals.
-	compactCardStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(colorBorder).
-				Padding(0, 2)
-
 	labelStyle        = lipgloss.NewStyle().Foreground(colorMuted)
 	labelFocusedStyle = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
 
 	inputStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, false, true, false).
 			BorderForeground(colorBorder).
-			Padding(0, 1)
+			Padding(0, 2)
 
 	inputFocusedStyle = inputStyle.Copy().BorderForeground(colorAccent)
 
@@ -165,37 +153,6 @@ func truncate(s string, width int) string {
 		used += w
 	}
 	return b.String() + "…"
-}
-
-// wrapText wraps s to lines of at most width terminal cells. It respects
-// explicit newlines and works for CJK text (which has no spaces).
-func wrapText(s string, width int) []string {
-	if width <= 0 {
-		return []string{s}
-	}
-	var lines []string
-	for _, paragraph := range strings.Split(s, "\n") {
-		if paragraph == "" {
-			lines = append(lines, "")
-			continue
-		}
-		var line strings.Builder
-		lineW := 0
-		for _, r := range paragraph {
-			w := lipgloss.Width(string(r))
-			if lineW+w > width && line.Len() > 0 {
-				lines = append(lines, line.String())
-				line.Reset()
-				lineW = 0
-			}
-			line.WriteRune(r)
-			lineW += w
-		}
-		if line.Len() > 0 {
-			lines = append(lines, line.String())
-		}
-	}
-	return lines
 }
 
 // maskPhone hides the middle digits of a phone number: 138****0000.

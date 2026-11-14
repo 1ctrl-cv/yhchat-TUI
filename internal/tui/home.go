@@ -2,9 +2,7 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -119,71 +117,40 @@ func (m homeModel) Update(msg tea.Msg) (homeModel, tea.Cmd) {
 	return m, nil
 }
 
-// View implements tea.Model for the home screen.
+// View implements tea.Model for the home screen. It fills the whole terminal:
+// header, account overview, and a bottom hint bar (see screenChrome).
 func (m homeModel) View() string {
-	width, height := m.width, m.height
-	if width <= 0 {
-		width = 80
-	}
-	if height <= 0 {
-		height = 24
-	}
-	cardW := clamp(width-8, 50, 84)
-	inner := cardW - 6
-	compact := height < 24
+	width, height := screenSize(m.width, m.height)
+	inner := width - 2*chromePadX
+	body := m.bodyLines(inner, height-4)
 
-	content := make([]string, 0, 32)
-	content = append(content, m.viewHeader(inner)...)
-	if !compact {
-		content = append(content, "")
+	headerRight := okStyle.Render("● 已登录")
+	if m.user != nil && m.user.Data != nil && m.user.Data.Name != "" {
+		headerRight = okStyle.Render("● 已登录 · " + truncate(m.user.Data.Name, 24))
 	}
-	content = append(content, titleAccentStyle.Render("账号信息"))
-	if !compact {
-		content = append(content, "")
-	}
-	content = append(content, m.viewInfoRows(inner)...)
-	if !compact {
-		content = append(content, "")
-		content = append(content, hintStyle.Render("登录成功。聊天与消息功能将在后续版本实现。"))
-		content = append(content, "")
-	}
-	content = append(content, m.viewStatus(inner)...)
-	if compact {
-		dense := content[:0]
-		for _, line := range content {
-			if line != "" {
-				dense = append(dense, line)
-			}
-		}
-		content = dense
-	}
-
-	style := cardStyle
-	if compact {
-		style = compactCardStyle
-	}
-	card := style.Width(cardW - 2).Render(lipgloss.JoinVertical(lipgloss.Left, content...))
-	footer := hintStyle.Render(fmt.Sprintf(
-		"yhchat-tui v%s · r 刷新 · l 退出登录 · q 退出", Version))
-	if height < 20 {
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, card)
-	}
-	block := lipgloss.JoinVertical(lipgloss.Center, card, footer)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block)
+	return screenChromeTop(width, height,
+		titleAccentStyle.Render("▌ 云湖 TUI"),
+		headerRight,
+		body,
+		"r 刷新 · l 退出登录 · q 退出 · Ctrl+C 退出",
+	)
 }
 
-// viewHeader renders the top title row with the logged-in indicator.
-func (m homeModel) viewHeader(inner int) []string {
-	left := titleAccentStyle.Render("◈ 云湖 TUI")
-	right := okStyle.Render("● 已登录")
-	if m.user != nil && m.user.Data != nil && m.user.Data.Name != "" {
-		right = okStyle.Render("● 已登录 · " + truncate(m.user.Data.Name, 20))
+// bodyLines renders the account overview, dropping decorations first on short
+// terminals.
+func (m homeModel) bodyLines(inner, avail int) []string {
+	lines := []string{"", titleAccentStyle.Render("账号信息"), ""}
+	lines = append(lines, m.viewInfoRows(inner)...)
+	lines = append(lines, "")
+	lines = append(lines, hintStyle.Render("登录成功。聊天与消息功能将在后续版本实现。"))
+	lines = append(lines, "")
+	lines = append(lines, m.viewStatusLine(inner))
+	if layoutHeight(lines) > avail {
+		lines = []string{titleAccentStyle.Render("账号信息")}
+		lines = append(lines, m.viewInfoRows(inner)...)
+		lines = append(lines, m.viewStatusLine(inner))
 	}
-	gap := inner - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	return []string{left + strings.Repeat(" ", gap) + right, separator(inner)}
+	return lines
 }
 
 // viewInfoRows renders the profile rows.
@@ -221,7 +188,7 @@ func (m homeModel) viewInfoRows(inner int) []string {
 		{"邀请码", invite},
 	}
 
-	const labelW = 10
+	const labelW = 12
 	lines := make([]string, 0, len(rows))
 	for _, row := range rows {
 		label := padLine(row[0], labelW)
@@ -229,36 +196,23 @@ func (m homeModel) viewInfoRows(inner int) []string {
 		if value == "" {
 			value = "-"
 		}
-		value = truncate(value, inner-labelW-3)
+		value = truncate(value, inner-labelW-4)
 		lines = append(lines, "  "+labelStyle.Render(label)+"  "+valueStyle.Render(value))
 	}
 	return lines
 }
 
-// viewStatus renders the message/loading area plus key hints.
-func (m homeModel) viewStatus(inner int) []string {
-	var lines []string
+// viewStatusLine renders the one-line status message (loading/error/notice).
+func (m homeModel) viewStatusLine(inner int) string {
+	var line string
 	switch {
 	case m.loading:
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Center,
-			m.spinner.View(), " ", hintStyle.Render("正在刷新账号信息…")))
+		line = lipgloss.JoinHorizontal(lipgloss.Center,
+			m.spinner.View(), " ", hintStyle.Render("正在刷新账号信息…"))
 	case m.errText != "":
-		for _, l := range wrapText(m.errText, inner) {
-			lines = append(lines, errStyle.Render(l))
-		}
+		line = errStyle.Render(truncate(m.errText, inner))
 	case m.okText != "":
-		for _, l := range wrapText(m.okText, inner) {
-			lines = append(lines, okStyle.Render(l))
-		}
-	default:
-		lines = append(lines, "")
+		line = okStyle.Render(truncate(m.okText, inner))
 	}
-	if len(lines) > 2 {
-		lines = lines[:2]
-	}
-	lines = append(lines, hintStyle.Render(truncate("r 刷新 · l 退出登录 · q 退出 · Ctrl+C 退出", inner)))
-	for i, line := range lines {
-		lines[i] = lipgloss.PlaceHorizontal(inner, lipgloss.Center, line)
-	}
-	return lines
+	return lipgloss.PlaceHorizontal(inner, lipgloss.Center, line)
 }

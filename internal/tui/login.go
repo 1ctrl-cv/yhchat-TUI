@@ -82,7 +82,6 @@ type loginModel struct {
 	notice   string // persistent hint from the App (e.g. session expired)
 
 	useColor bool
-	deviceID string
 }
 
 // newLoginModel builds the login screen, restoring the last used method and
@@ -100,7 +99,6 @@ func newLoginModel(client *api.Client, prefs config.Config) loginModel {
 		smsCode:   newTextInput("SMS code", false, 16),
 		spinner:   newSpinner(),
 		useColor:  colorEnabled(),
-		deviceID:  client.DeviceID,
 	}
 	if prefs.LoginMethod == "sms" {
 		m.method = methodSMS
@@ -596,153 +594,148 @@ func (m loginModel) submitLabel() string {
 	}
 }
 
-// View implements tea.Model for the login screen. It picks the roomiest layout
-// that fits the terminal: a full card with section spacing when there is room,
-// and progressively denser variants for short terminals.
+// View implements tea.Model for the login screen. The screen fills the whole
+// terminal: header, body, and a bottom hint bar (see screenChrome).
 func (m loginModel) View() string {
-	width, height := m.width, m.height
-	if width <= 0 {
-		width = 80
-	}
-	if height <= 0 {
-		height = 24
-	}
-	cardW := clamp(width-8, 44, 80)
-	inner := cardW - 6
+	width, height := screenSize(m.width, m.height)
+	inner := width - 2*chromePadX
+	body := m.bodyLines(inner, height-4)
 
-	footer := hintStyle.Render(fmt.Sprintf(
-		"yhchat-tui v%s · 设备 ID %s · Ctrl+C 退出", Version, shortID(m.deviceID)))
-
-	padV := 1
-	if height < 28 {
-		padV = 0
+	headerRight := subtitleStyle.Render("邮箱密码登录")
+	if m.method == methodSMS {
+		headerRight = subtitleStyle.Render("短信验证码登录")
 	}
-	captchaRows := clamp(height-22, 4, maxCaptchaRows)
-
-	// Candidate layouts, roomiest first.
-	type layout struct {
-		content []string
-		padV    int
-	}
-	candidates := make([]layout, 0, 16)
-	candidates = append(candidates,
-		layout{m.cardContent(inner, true, captchaRows), padV},
-		layout{m.cardContent(inner, false, captchaRows), padV},
+	return screenChrome(width, height,
+		titleAccentStyle.Render("▌ 云湖 TUI"),
+		headerRight,
+		body,
+		m.viewHints(),
 	)
-	for rows := captchaRows; rows >= 4; rows-- {
-		candidates = append(candidates, layout{m.cardContent(inner, false, rows), 0})
-	}
+}
 
-	chosen := candidates[len(candidates)-1]
-	found := false
-	for _, c := range candidates {
-		if m.cardHeight(c.content, c.padV)+1 <= height {
-			chosen = c
-			found = true
-			break
+// bodyLines builds the form for the current state and fits it into avail rows:
+// decorative spacing is dropped first, then the captcha image shrinks.
+func (m loginModel) bodyLines(inner, avail int) []string {
+	if m.method == methodEmail {
+		if roomy := m.emailForm(inner, true); layoutHeight(roomy) <= avail {
+			return roomy
 		}
-	}
-	if !found {
-		// Very short terminal: drop the card chrome entirely and show the bare
-		// form, which always fits.
-		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center,
-			m.viewBare(inner))
+		return m.emailForm(inner, false)
 	}
 
-	style := cardStyle
-	if chosen.padV == 0 {
-		style = compactCardStyle
+	switch m.stage {
+	case smsStageCaptcha:
+		// The captcha is the readability-critical part: on short terminals use
+		// the compact form so the image keeps more rows.
+		if avail >= 28 {
+			return m.smsCaptchaForm(inner, true, clamp(avail-16, 3, maxCaptchaRows))
+		}
+		return m.smsCaptchaForm(inner, false, clamp(avail-13, 3, maxCaptchaRows))
+	case smsStageCode:
+		if roomy := m.smsCodeForm(inner, true); layoutHeight(roomy) <= avail {
+			return roomy
+		}
+		return m.smsCodeForm(inner, false)
+	default:
+		if roomy := m.smsPhoneForm(inner, true); layoutHeight(roomy) <= avail {
+			return roomy
+		}
+		return m.smsPhoneForm(inner, false)
 	}
-	card := style.Width(cardW - 2).Render(lipgloss.JoinVertical(lipgloss.Left, chosen.content...))
-	block := lipgloss.JoinVertical(lipgloss.Center, card, footer)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block)
 }
 
-// viewBare renders the login form without card chrome for very short
-// terminals. It keeps every interactive element and the current message but
-// drops decorations and the hint line.
-func (m loginModel) viewBare(inner int) string {
-	lines := []string{
-		titleAccentStyle.Render("◈ 云湖 TUI") + "  " + subtitleStyle.Render("Yunhu Chat · TUI"),
-		m.viewTabs(inner),
-	}
-	if m.method == methodEmail {
-		lines = append(lines, m.viewEmailForm(inner, false)...)
-	} else {
-		lines = append(lines, m.viewSMSForm(inner, false, 4)...)
-	}
-	if msg := m.statusMessage(); msg != "" {
-		lines = append(lines, lipgloss.PlaceHorizontal(inner, lipgloss.Center, msg))
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
-}
-
-// statusMessage returns the single-line status message for compact layouts.
-func (m loginModel) statusMessage() string {
-	switch {
-	case m.busy:
-		return hintStyle.Render(m.busyText)
-	case m.errText != "":
-		return errStyle.Render(truncate(m.errText, 60))
-	case m.okText != "":
-		return okStyle.Render(truncate(m.okText, 60))
-	case m.notice != "":
-		return warnStyle.Render(truncate(m.notice, 60))
-	}
-	return ""
-}
-
-// cardContent assembles the card body for the current form state.
-func (m loginModel) cardContent(inner int, roomy bool, captchaRows int) []string {
-	lines := make([]string, 0, 32)
-	lines = append(lines, m.viewHeader(inner, roomy)...)
+// emailForm renders the email/password form.
+func (m loginModel) emailForm(inner int, roomy bool) []string {
+	lines := []string{m.viewTabs(inner)}
 	if roomy {
 		lines = append(lines, "")
 	}
-	lines = append(lines, m.viewTabs(inner))
+	lines = append(lines,
+		m.viewLabel("邮箱", m.focus == focusEmail, inner),
+		m.viewInput(focusEmail, inner),
+	)
 	if roomy {
 		lines = append(lines, "")
 	}
-	if m.method == methodEmail {
-		lines = append(lines, m.viewEmailForm(inner, roomy)...)
-	} else {
-		lines = append(lines, m.viewSMSForm(inner, roomy, captchaRows)...)
-	}
+	lines = append(lines,
+		m.viewLabel("密码", m.focus == focusPassword, inner),
+		m.viewInput(focusPassword, inner),
+	)
 	if roomy {
 		lines = append(lines, "")
 	}
-	lines = append(lines, m.viewStatus(inner)...)
+	lines = append(lines, m.viewButton(m.submitLabel(), inner), m.viewStatusLine(inner))
 	return lines
 }
 
-// cardHeight is the rendered height of a card with the given body and vertical
-// padding (border included, footer excluded). Some body entries are themselves
-// multi-line strings (bordered inputs/buttons), so their newlines are counted.
-func (m loginModel) cardHeight(content []string, padV int) int {
-	lines := 0
-	for _, entry := range content {
-		lines += strings.Count(entry, "\n") + 1
-	}
-	return lines + padV*2 + 2
-}
-
-// viewHeader renders the app title block.
-func (m loginModel) viewHeader(inner int, roomy bool) []string {
-	left := titleAccentStyle.Render("◈ 云湖 TUI")
-	right := subtitleStyle.Render("Yunhu Chat · TUI")
-	gap := inner - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
-	}
-	lines := []string{left + strings.Repeat(" ", gap) + right, separator(inner)}
+// smsPhoneForm renders the first SMS step (mobile number only).
+func (m loginModel) smsPhoneForm(inner int, roomy bool) []string {
+	lines := []string{m.viewTabs(inner)}
 	if roomy {
-		lines = append(lines, truncate(
-			subtitleStyle.Render("使用云湖账号登录；登录状态会保存在本机配置目录"), inner))
+		lines = append(lines, "")
 	}
+	lines = append(lines,
+		m.viewLabel("手机号", m.focus == focusPhone, inner),
+		m.viewInput(focusPhone, inner),
+	)
+	if roomy {
+		lines = append(lines, "")
+	}
+	lines = append(lines, m.viewButton(m.submitLabel(), inner), m.viewStatusLine(inner))
 	return lines
 }
 
-// viewTabs renders the login method selector.
+// smsCaptchaForm renders the SMS step where the image captcha is shown.
+func (m loginModel) smsCaptchaForm(inner int, roomy bool, captchaRows int) []string {
+	lines := []string{m.viewTabs(inner)}
+	if roomy {
+		lines = append(lines, "")
+	}
+	lines = append(lines,
+		m.viewLabel("手机号", m.focus == focusPhone, inner),
+		m.viewInput(focusPhone, inner),
+	)
+	if roomy {
+		lines = append(lines, "")
+	}
+	lines = append(lines,
+		m.viewLabel("图形验证码", m.focus == focusImageCode, inner),
+	)
+	lines = append(lines, m.viewCaptcha(inner, captchaRows)...)
+	lines = append(lines, m.viewInput(focusImageCode, inner))
+	if roomy {
+		lines = append(lines, "")
+	}
+	lines = append(lines, m.viewButton(m.submitLabel(), inner), m.viewStatusLine(inner))
+	return lines
+}
+
+// smsCodeForm renders the final SMS step (code entry). The captcha image is no
+// longer shown: it has already been used to send the SMS.
+func (m loginModel) smsCodeForm(inner int, roomy bool) []string {
+	lines := []string{m.viewTabs(inner)}
+	if roomy {
+		lines = append(lines, "")
+	}
+	lines = append(lines,
+		m.viewLabel("手机号", m.focus == focusPhone, inner),
+		m.viewInput(focusPhone, inner),
+	)
+	if roomy {
+		lines = append(lines, "")
+	}
+	lines = append(lines,
+		m.viewLabel("短信验证码", m.focus == focusSMSCode, inner),
+		m.viewInput(focusSMSCode, inner),
+	)
+	if roomy {
+		lines = append(lines, "")
+	}
+	lines = append(lines, m.viewButton(m.submitLabel(), inner), m.viewStatusLine(inner))
+	return lines
+}
+
+// viewTabs renders the login method selector, left aligned like the form.
 func (m loginModel) viewTabs(inner int) string {
 	emailStyle, smsStyle := tabInactiveStyle, tabInactiveStyle
 	if m.method == methodEmail {
@@ -764,53 +757,7 @@ func (m loginModel) viewTabs(inner int) string {
 			titleAccentStyle.Render("›"),
 		)
 	}
-	return lipgloss.PlaceHorizontal(inner, lipgloss.Center, row)
-}
-
-// viewEmailForm renders the email/password tab.
-func (m loginModel) viewEmailForm(inner int, roomy bool) []string {
-	lines := []string{
-		m.viewLabel("邮箱", m.focus == focusEmail, inner),
-		m.viewInput(focusEmail, inner),
-	}
-	if roomy {
-		lines = append(lines, "")
-	}
-	lines = append(lines, m.viewLabel("密码", m.focus == focusPassword, inner))
-	lines = append(lines, m.viewInput(focusPassword, inner))
-	if roomy {
-		lines = append(lines, "")
-	}
-	lines = append(lines, m.viewButton(m.submitLabel(), inner))
-	return lines
-}
-
-// viewSMSForm renders the SMS tab, including the captcha image once loaded.
-func (m loginModel) viewSMSForm(inner int, roomy bool, captchaRows int) []string {
-	lines := []string{
-		m.viewLabel("手机号", m.focus == focusPhone, inner),
-		m.viewInput(focusPhone, inner),
-	}
-	if m.stage >= smsStageCaptcha {
-		if roomy {
-			lines = append(lines, "")
-		}
-		lines = append(lines, m.viewLabel("图形验证码", m.focus == focusImageCode, inner))
-		lines = append(lines, m.viewCaptcha(inner, captchaRows)...)
-		lines = append(lines, m.viewInput(focusImageCode, inner))
-	}
-	if m.stage >= smsStageCode {
-		if roomy {
-			lines = append(lines, "")
-		}
-		lines = append(lines, m.viewLabel("短信验证码", m.focus == focusSMSCode, inner))
-		lines = append(lines, m.viewInput(focusSMSCode, inner))
-	}
-	if roomy {
-		lines = append(lines, "")
-	}
-	lines = append(lines, m.viewButton(m.submitLabel(), inner))
-	return lines
+	return "  " + row
 }
 
 // viewLabel renders a field label.
@@ -819,7 +766,7 @@ func (m loginModel) viewLabel(label string, focused bool, inner int) string {
 	prefix := "  "
 	if focused {
 		style = labelFocusedStyle
-		prefix = "▸ "
+		prefix = "» "
 	}
 	return truncate(style.Render(prefix+label), inner)
 }
@@ -832,7 +779,7 @@ func (m loginModel) viewInput(id focusID, inner int) string {
 	}
 	focused := m.focus == id && !m.busy
 	input := *ti
-	input.Width = maxInt(4, inner-3)
+	input.Width = maxInt(4, inner-5)
 	style := inputStyle
 	if focused {
 		style = inputFocusedStyle
@@ -852,81 +799,71 @@ func (m loginModel) viewButton(label string, inner int) string {
 	return lipgloss.PlaceHorizontal(inner, lipgloss.Center, style.Render(label))
 }
 
-// viewCaptcha renders the captcha image inside a bordered box.
+// viewCaptcha renders the captcha image inside a bordered box, centred
+// horizontally.
 //
 // Note on widths: lipgloss.Style.Width sets the content width including
-// padding, and a border adds one cell on each side, so a box of total width
-// `inner` uses Width(inner-2); its content area is inner-4, which is the column
-// budget handed to the image renderer. Lines wider than that would make
-// lipgloss word-wrap the image, so the budget must be exact.
+// padding, and a border adds one cell on each side, so the content budget for
+// the image is inner-4 (inner = usable body width). Lines wider than that would
+// make lipgloss word-wrap the image, so the budget must be exact.
 func (m loginModel) viewCaptcha(inner int, maxRows int) []string {
 	if m.capImg == nil {
-		return []string{hintStyle.Render("（图形验证码加载中…）")}
+		rule := hintStyle.Render("（图形验证码加载中…）")
+		return []string{lipgloss.PlaceHorizontal(inner, lipgloss.Center, rule)}
 	}
-	cols := maxInt(24, inner-4)
+	colsBudget := maxInt(24, inner-4)
 	rendered := captchaimg.Render(m.capImg, captchaimg.Options{
-		MaxCols: cols,
+		MaxCols: colsBudget,
 		MaxRows: maxRows,
 		Color:   m.useColor,
 	})
 	if rendered == "" {
-		return []string{hintStyle.Render("（验证码图片无法渲染，Ctrl+S 保存后查看）")}
+		rule := hintStyle.Render("（验证码图片无法渲染，Ctrl+S 保存后查看）")
+		return []string{lipgloss.PlaceHorizontal(inner, lipgloss.Center, rule)}
+	}
+	cols := 0
+	for _, line := range strings.Split(rendered, "\n") {
+		if w := lipgloss.Width(line); w > cols {
+			cols = w
+		}
 	}
 	box := captchaBoxStyle.Width(cols + 2).Render(rendered)
-	parts := strings.Split(box, "\n")
-	for i, p := range parts {
-		parts[i] = padLine(p, inner)
-	}
-	return parts
+	centered := lipgloss.PlaceHorizontal(inner, lipgloss.Center, box)
+	return strings.Split(centered, "\n")
 }
 
-// viewStatus renders the message area and the key hints.
-func (m loginModel) viewStatus(inner int) []string {
-	var lines []string
+// viewStatusLine renders the one-line status message (busy/error/notice).
+func (m loginModel) viewStatusLine(inner int) string {
+	var line string
 	switch {
 	case m.busy:
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Center,
-			m.spinner.View(), " ", hintStyle.Render(m.busyText)))
+		line = lipgloss.JoinHorizontal(lipgloss.Center,
+			m.spinner.View(), " ", hintStyle.Render(m.busyText))
 	case m.errText != "":
-		for _, l := range wrapText(m.errText, inner) {
-			lines = append(lines, errStyle.Render(l))
-		}
+		line = errStyle.Render(truncate(m.errText, inner))
 	case m.okText != "":
-		for _, l := range wrapText(m.okText, inner) {
-			lines = append(lines, okStyle.Render(l))
-		}
+		line = okStyle.Render(truncate(m.okText, inner))
 	case m.notice != "":
-		for _, l := range wrapText(m.notice, inner) {
-			lines = append(lines, warnStyle.Render(l))
-		}
-	default:
-		lines = append(lines, "")
+		line = warnStyle.Render(truncate(m.notice, inner))
 	}
-	if len(lines) > 2 {
-		lines = lines[:2]
-	}
-	lines = append(lines, hintStyle.Render(truncate(m.viewHints(), inner)))
-	for i, line := range lines {
-		lines[i] = lipgloss.PlaceHorizontal(inner, lipgloss.Center, line)
-	}
-	return lines
+	return lipgloss.PlaceHorizontal(inner, lipgloss.Center, line)
 }
 
-// viewHints returns the keyboard shortcut hint line.
+// viewHints returns the keyboard shortcut hint shown in the bottom bar.
 func (m loginModel) viewHints() string {
 	if m.focus == focusTabs {
-		return "←/→ 选择登录方式 · Tab/↑↓ 切换焦点 · Enter 确认"
+		return "←/→ 选择登录方式 · Tab/↑↓ 切换焦点 · Enter 确认 · Ctrl+C 退出"
 	}
 	if m.method == methodEmail {
-		return "Tab/↑↓ 切换 · Enter 登录 · Ctrl+T 切换方式 · Ctrl+C 退出"
+		return "Tab/↑↓ 切换焦点 · Enter 登录 · Ctrl+T 切换登录方式 · Ctrl+C 退出"
 	}
 	switch m.stage {
 	case smsStagePhone:
-		return "Enter 获取图形验证码 · Ctrl+T 切换方式 · Ctrl+C 退出"
+		return "Enter 获取图形验证码 · Ctrl+T 切换登录方式 · Ctrl+C 退出"
 	case smsStageCaptcha:
-		return "Enter 发送短信验证码 · Ctrl+R 刷新 · Ctrl+S 保存图片 · Esc 返回"
+		return "Enter 发送短信验证码 · Ctrl+R 更换验证码 · Ctrl+S 保存图片 · Esc 返回 · Ctrl+C 退出"
 	default:
-		return "Enter 登录 · Ctrl+R 重新获取验证码 · Esc 返回 · Ctrl+C 退出"
+		return "Enter 登录 · Esc 返回 · Ctrl+C 退出"
 	}
 }
 
@@ -958,12 +895,4 @@ func validateEmail(email string) error {
 		return fmt.Errorf("请输入有效的邮箱地址")
 	}
 	return nil
-}
-
-// shortID returns the first 8 characters of id for display.
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
 }
