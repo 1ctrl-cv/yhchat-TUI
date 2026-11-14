@@ -1,0 +1,50 @@
+package tui
+
+import (
+	"image"
+
+	"yhchat-tui/internal/api"
+)
+
+// Internal Bubble Tea messages exchanged between the screens and the root App.
+
+// autoLoginMsg is produced by the startup token check.
+type autoLoginMsg struct {
+	user *api.UserInfo
+	err  error
+}
+
+// captchaLoadedMsg is produced after fetching an image captcha.
+type captchaLoadedMsg struct {
+	captcha *api.ImageCaptcha
+	img     image.Image // decoded captcha image, nil on error
+	err     error
+}
+
+// smsSentMsg is produced after asking the server to send an SMS code.
+type smsSentMsg struct{ err error }
+
+// loginSucceededMsg carries a fresh token and (optionally) the account profile.
+type loginSucceededMsg struct {
+	token   string
+	user    *api.UserInfo
+	userErr error
+	method  string // "email" or "sms"
+	account string // email or mobile, remembered for next run
+}
+
+// loginFailedMsg reports a failed login attempt.
+type loginFailedMsg struct{ err error }
+
+// logoutDoneMsg is produced after the logout request finished (or was skipped).
+type logoutDoneMsg struct{ err error }
+
+// homeUserMsg refreshes the account profile on the home screen.
+type homeUserMsg struct {
+	user *api.UserInfo
+	err  error
+}
+
+// expiringTokenMsg asks the App to drop the token and return to the login
+// screen because the server rejected it.
+type expiringTokenMsg struct{ err error }

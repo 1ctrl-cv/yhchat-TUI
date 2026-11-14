@@ -1,0 +1,20 @@
+# Build outputs
+dist/
+*.exe
+*.test
+
+# Go caches / scratch directories created inside the workspace by sandboxed
+# development sessions (safe to delete)
+.gopath/
+.gocache/
+.gomodcache/
+_probe/
+_probe2/
+_nettest/
+_tools/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
