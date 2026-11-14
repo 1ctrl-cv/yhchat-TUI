@@ -557,11 +557,7 @@ func (m homeModel) openDetail() (homeModel, tea.Cmd) {
 	case detailFormAddFriend:
 		m.addFriendType = 0
 		m.addFriendTabsFocus = false
-		m.initFields([]fieldSpec{
-			{Placeholder: "user id"},
-			{Placeholder: "verification message"},
-		})
-		m.setAddFriendIDPlaceholder()
+		m.initFields([]fieldSpec{{}, {}})
 		return m, m.applyFieldFocus()
 	}
 	return m, nil
@@ -646,16 +642,6 @@ func (m homeModel) cycleFormFocus(delta int) (homeModel, tea.Cmd) {
 // setAddFriendType switches the add-friend target type (0 user / 1 group / 2 bot).
 func (m *homeModel) setAddFriendType(value int) {
 	m.addFriendType = clamp(value, 0, 2)
-	m.setAddFriendIDPlaceholder()
-}
-
-// setAddFriendIDPlaceholder updates the ID input placeholder for the type.
-func (m *homeModel) setAddFriendIDPlaceholder() {
-	if len(m.fields) == 0 {
-		return
-	}
-	placeholders := []string{"user id", "group id", "bot id"}
-	m.fields[0].Placeholder = placeholders[clamp(m.addFriendType, 0, len(placeholders)-1)]
 }
 
 // openUserDataEdit opens the edit form prefilled with the current profile.
