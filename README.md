@@ -16,6 +16,18 @@
 - **跨平台**：纯 Go、无 CGO；Windows / Linux（amd64、arm64）
 - **自适应小终端**：卡片布局会随终端尺寸在完整/紧凑/无边框模式间自动切换
 
+## 界面预览
+
+以下截图由 TUI 实际渲染的 ANSI 输出转换而成（字体/配色会因终端而略有差异）。
+
+| 邮箱密码登录 | 短信验证码登录（终端内渲染图片验证码） |
+| --- | --- |
+| ![邮箱密码登录](assets/screenshots/login-email.png) | ![短信验证码登录](assets/screenshots/login-sms-captcha.png) |
+
+| 登录失败提示 | 账号信息主页 |
+| --- | --- |
+| ![登录失败提示](assets/screenshots/login-error.png) | ![账号信息主页](assets/screenshots/home.png) |
+
 ## 环境要求
 
 - Go **1.24+**（开发使用 go1.27.4 验证）
