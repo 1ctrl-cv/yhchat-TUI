@@ -838,7 +838,6 @@ func (m mainWindowModel) handleWSEvent(event api.WSEvent) (mainWindowModel, tea.
 	switch event.Kind {
 	case api.WSEventConnected:
 		m.wsConnected = true
-		m.okText = "实时消息已连接"
 		m.errText = ""
 		if !m.wsEverConnected {
 			m.wsEverConnected = true
@@ -857,11 +856,6 @@ func (m mainWindowModel) handleWSEvent(event api.WSEvent) (mainWindowModel, tea.
 		return m, tea.Batch(resync...)
 	case api.WSEventDisconnected:
 		m.wsConnected = false
-		if event.Err != nil {
-			m.okText = "实时连接已断开，正在重连…"
-		} else {
-			m.okText = "实时连接已断开"
-		}
 		return m, nil
 	case api.WSEventPush:
 		if event.Push != nil {
@@ -1207,10 +1201,14 @@ func (m mainWindowModel) View() string {
 	bodyH := maxInt(8, height-4)
 
 	body := m.bodyLines(inner, bodyH)
-	headerRight := okStyle.Render("● 已登录")
+	// The dot in the top-right corner doubles as the realtime connection
+	// indicator: green when connected, yellow while reconnecting.
+	connected := m.ws == nil || m.wsConnected
+	name := "已登录"
 	if m.user != nil && m.user.Data != nil && m.user.Data.Name != "" {
-		headerRight = okStyle.Render("● " + truncate(m.user.Data.Name, 24))
+		name = truncate(m.user.Data.Name, 24)
 	}
+	headerRight := wsDotStyle(connected).Render("●") + " " + okStyle.Render(name)
 	return screenChromeTop(width, height,
 		titleAccentStyle.Render("▌ 云湖 TUI"),
 		headerRight,
@@ -1355,13 +1353,6 @@ func (m mainWindowModel) chatLines(bodyH, width int) []string {
 
 	// Header.
 	var right []string
-	if m.ws != nil {
-		if m.wsConnected {
-			right = append(right, okStyle.Render("● 实时"))
-		} else {
-			right = append(right, hintStyle.Render("○ 重连中"))
-		}
-	}
 	if conv == nil {
 		lines = append(lines, composeLeftRight(width,
 			chatTitleStyle.Render("选择会话开始聊天"),

@@ -230,16 +230,23 @@ func TestChatRealtimeConnectionState(t *testing.T) {
 	if !app.chat.wsConnected {
 		t.Fatal("wsConnected not set")
 	}
-	if !strings.Contains(app.View(), "● 实时") {
-		t.Fatalf("connected indicator missing\n%s", app.View())
+	view := app.View()
+	if strings.Contains(view, "实时") || strings.Contains(view, "重连中") {
+		t.Fatalf("connection status text should be removed from the UI\n%s", view)
+	}
+	if !strings.Contains(view, "● "+testName) {
+		t.Fatalf("top-right connection dot missing\n%s", view)
+	}
+	if app.chat.okText != "" {
+		t.Fatalf("okText = %q, want empty", app.chat.okText)
 	}
 
 	app.Update(wsEventMsg{event: api.WSEvent{Kind: api.WSEventDisconnected}})
 	if app.chat.wsConnected {
 		t.Fatal("wsConnected not cleared")
 	}
-	if !strings.Contains(app.View(), "○ 重连中") {
-		t.Fatalf("reconnecting indicator missing\n%s", app.View())
+	if strings.Contains(app.View(), "重连中") {
+		t.Fatalf("connection status text should be removed from the UI\n%s", app.View())
 	}
 }
 

@@ -153,6 +153,14 @@ func maxInt(a, b int) int {
 	return b
 }
 
+// wsDotStyle returns the style of the realtime connection indicator dot.
+func wsDotStyle(connected bool) lipgloss.Style {
+	if connected {
+		return lipgloss.NewStyle().Foreground(colorSuccess)
+	}
+	return lipgloss.NewStyle().Foreground(colorWarn)
+}
+
 // separator renders a horizontal rule of the given width.
 func separator(width int) string {
 	if width <= 0 {
