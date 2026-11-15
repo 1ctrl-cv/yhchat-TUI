@@ -898,6 +898,26 @@ func validateEmail(email string) error {
 	return nil
 }
 
+// loginTabAt maps a body-relative column to a login-method tab. It mirrors the
+// rendering in viewTabs: two spaces of indent, then the email tab, one space,
+// then the SMS tab (plus focus arrows when the tab row itself is focused).
+func (m loginModel) loginTabAt(localX int) (loginMethod, bool) {
+	indent := 2
+	if m.focus == focusTabs {
+		indent += 2 // "‹ "
+	}
+	emailWidth := lipgloss.Width(tabInactiveStyle.Render("邮箱密码"))
+	smsWidth := lipgloss.Width(tabInactiveStyle.Render("短信验证码"))
+	if localX >= indent && localX < indent+emailWidth {
+		return methodEmail, true
+	}
+	smsStart := indent + emailWidth + 1
+	if localX >= smsStart && localX < smsStart+smsWidth {
+		return methodSMS, true
+	}
+	return methodEmail, false
+}
+
 // handleMouse implements click interactions on the login screen. It maps the
 // clicked row back to the rendered form (tabs, fields and submit button).
 func (m loginModel) handleMouse(msg tea.MouseMsg) (loginModel, tea.Cmd) {
@@ -919,21 +939,22 @@ func (m loginModel) handleMouse(msg tea.MouseMsg) (loginModel, tea.Cmd) {
 	}
 	line := flat[localY]
 
-	// First body row is always the login-method tab bar.
+	// First body row is always the login-method tab bar. The tabs are rendered
+	// left-aligned (not across the whole row), so hit-test their real widths.
 	if localY == 0 {
-		target := methodSMS
-		if localX < inner/2 {
-			target = methodEmail
-		}
-		if target == m.method {
-			return m, nil
+		if target, ok := m.loginTabAt(localX); ok {
+			if target == m.method {
+				return m, nil
+			}
+			m.focus = focusTabs
+			key := tea.KeyMsg{Type: tea.KeyRight}
+			if target == methodEmail {
+				key = tea.KeyMsg{Type: tea.KeyLeft}
+			}
+			return m.handleKey(key)
 		}
 		m.focus = focusTabs
-		key := tea.KeyMsg{Type: tea.KeyRight}
-		if target == methodEmail {
-			key = tea.KeyMsg{Type: tea.KeyLeft}
-		}
-		return m.handleKey(key)
+		return m, m.applyFocus()
 	}
 
 	switch {

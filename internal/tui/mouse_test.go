@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // sendMouse sends one mouse event to the app.
@@ -231,5 +232,46 @@ func TestMouseProfileUserDataEditButton(t *testing.T) {
 	applyAll(t, app, cmd)
 	if app.home.detail != detailFormUserData {
 		t.Fatalf("detail = %v, want edit form", app.home.detail)
+	}
+}
+
+// TestLoginMouseCanSwitchBackToSMS clicks the login-method tabs by their real
+// rendered positions (they are left-aligned, not split across the row).
+func TestLoginMouseCanSwitchBackToSMS(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+
+	clickTab := func(target string) {
+		t.Helper()
+		width, height := screenSize(100, 32)
+		inner := width - 2*chromePadX
+		avail := height - 4
+		flat := flattenLines(app.login.bodyLines(inner, avail))
+		top := (avail - len(flat)) / 2
+		emailWidth := lipgloss.Width(tabInactiveStyle.Render("邮箱密码"))
+		smsWidth := lipgloss.Width(tabInactiveStyle.Render("短信验证码"))
+		x := chromePadX + 2 + emailWidth/2
+		if target == "sms" {
+			x = chromePadX + 2 + emailWidth + 1 + smsWidth/2
+		}
+		applyAll(t, app, clickMouse(t, app, x, 2+top))
+	}
+
+	if app.login.method != methodEmail {
+		t.Fatalf("initial method = %v, want email", app.login.method)
+	}
+	clickTab("sms")
+	if app.login.method != methodSMS {
+		t.Fatalf("after SMS tab click method = %v, want SMS", app.login.method)
+	}
+	clickTab("email")
+	if app.login.method != methodEmail {
+		t.Fatalf("after email tab click method = %v, want email", app.login.method)
+	}
+	// The reported bug: clicking the SMS tab again must switch back.
+	clickTab("sms")
+	if app.login.method != methodSMS {
+		t.Fatalf("after second SMS tab click method = %v, want SMS", app.login.method)
 	}
 }
