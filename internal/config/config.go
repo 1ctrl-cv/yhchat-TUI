@@ -15,6 +15,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -42,7 +43,6 @@ type Account struct {
 	DeviceID    string `json:"deviceId,omitempty"`
 	LoginMethod string `json:"loginMethod,omitempty"` // "email" or "sms"
 	Email       string `json:"email,omitempty"`
-	Mobile      string `json:"mobile,omitempty"` // masked mobile number
 	Name        string `json:"name,omitempty"`
 	UserID      string `json:"userId,omitempty"`
 }
@@ -55,7 +55,6 @@ type Config struct {
 	// Preferences remembered between runs.
 	LoginMethod string `json:"loginMethod,omitempty"` // "email" or "sms"
 	LastEmail   string `json:"lastEmail,omitempty"`
-	LastMobile  string `json:"lastMobile,omitempty"`
 
 	// Accounts holds every remembered login (multi-account support).
 	Accounts []Account `json:"accounts,omitempty"`
@@ -78,20 +77,6 @@ func DefaultPath() (string, error) {
 		return "", fmt.Errorf("定位用户主目录失败: %w", err)
 	}
 	return filepath.Join(home, configDirName, "config.json"), nil
-}
-
-// maskStoredMobile masks an 11-digit plain mobile number, returning the new
-// value and whether it changed. Already masked or non-mobile values are kept.
-func maskStoredMobile(mobile string) (string, bool) {
-	if len(mobile) != 11 {
-		return mobile, false
-	}
-	for _, r := range mobile {
-		if r < '0' || r > '9' {
-			return mobile, false
-		}
-	}
-	return mobile[:3] + "****" + mobile[7:], true
 }
 
 // legacyPath returns the previous config location
@@ -156,10 +141,10 @@ func Load(path string) (*Store, error) {
 		}
 	}
 
-	// Never persist a plain mobile number: the login screen only needs it as a
-	// masked hint, so legacy plain values are hashed the same way.
-	if masked, changed := maskStoredMobile(s.Data.LastMobile); changed {
-		s.Data.LastMobile = masked
+	// Phone numbers are never stored. If an older config still contains the
+	// legacy lastMobile field (or a mobile field on a saved account), rewrite
+	// the file so the value is purged from disk.
+	if bytes.Contains(raw, []byte("lastMobile")) || bytes.Contains(raw, []byte(`"mobile"`)) {
 		migrated = true
 	}
 
@@ -244,7 +229,6 @@ func (s *Store) AccountList() []Account {
 				DeviceID:    s.Data.DeviceID,
 				LoginMethod: s.Data.LoginMethod,
 				Email:       s.Data.LastEmail,
-				Mobile:      s.Data.LastMobile,
 			}}, accounts...)
 		}
 	}
@@ -311,7 +295,6 @@ func (s *Store) SwitchAccount(token string) bool {
 		}
 		s.Data.LoginMethod = account.LoginMethod
 		s.Data.LastEmail = account.Email
-		s.Data.LastMobile = account.Mobile
 		return true
 	}
 	return false

@@ -1033,7 +1033,7 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 		}
 		if m.user != nil && m.user.Data != nil {
 			rows = append(rows,
-				[2]string{"手机号", maskPhone(m.user.Data.Phone)},
+
 				[2]string{"邮箱", maskEmail(m.user.Data.Email)},
 				[2]string{"邀请码", m.user.Data.InvitationCode},
 			)
@@ -1534,9 +1534,7 @@ func accountLabel(account config.Account) string {
 	if account.Email != "" {
 		return account.Email
 	}
-	if account.Mobile != "" {
-		return account.Mobile
-	}
+
 	if account.UserID != "" {
 		return "ID " + account.UserID
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -43,7 +44,6 @@ func TestSaveAndClearToken(t *testing.T) {
 	}
 	store.Data.Token = "token-123"
 	store.Data.LoginMethod = "sms"
-	store.Data.LastMobile = "13800001234"
 	if err := store.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestSaveAndClearToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if loaded.Data.Token != "token-123" || loaded.Data.LoginMethod != "sms" || loaded.Data.LastMobile != "138****1234" {
+	if loaded.Data.Token != "token-123" || loaded.Data.LoginMethod != "sms" {
 		t.Fatalf("unexpected reloaded config: %+v", loaded.Data)
 	}
 
@@ -66,7 +66,7 @@ func TestSaveAndClearToken(t *testing.T) {
 	if reloaded.Data.Token != "" {
 		t.Fatalf("token not cleared: %q", reloaded.Data.Token)
 	}
-	if reloaded.Data.LastMobile != "138****1234" {
+	if reloaded.Data.LoginMethod != "sms" {
 		t.Fatalf("preferences lost after clearing token: %+v", reloaded.Data)
 	}
 }
@@ -215,9 +215,10 @@ func TestLoadMigratesLegacyConfig(t *testing.T) {
 	}
 }
 
-func TestLoadMasksPlainMobile(t *testing.T) {
+func TestLoadPurgesRememberedMobile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	raw, _ := json.Marshal(Config{Token: "tok", DeviceID: "dev-1", LastMobile: "13800001234"})
+	raw := []byte(`{"token":"tok","deviceId":"dev-1","lastMobile":"138****1234",` +
+		`"accounts":[{"token":"tok","mobile":"138****1234"}]}`)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -225,30 +226,15 @@ func TestLoadMasksPlainMobile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if store.Data.LastMobile != "138****1234" {
-		t.Fatalf("last mobile = %q", store.Data.LastMobile)
+	if store.Data.Token != "tok" {
+		t.Fatalf("token = %q", store.Data.Token)
 	}
-	// The sanitized value must be persisted.
-	reloaded, err := Load(path)
+	// Loading a legacy config must remove the phone fields from disk.
+	persisted, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reload: %v", err)
+		t.Fatalf("read persisted config: %v", err)
 	}
-	if reloaded.Data.LastMobile != "138****1234" {
-		t.Fatalf("persisted last mobile = %q", reloaded.Data.LastMobile)
-	}
-}
-
-func TestLoadKeepsMaskedMobile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	raw, _ := json.Marshal(Config{DeviceID: "dev-1", LastMobile: "138****1234"})
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if store.Data.LastMobile != "138****1234" {
-		t.Fatalf("last mobile = %q", store.Data.LastMobile)
+	if strings.Contains(string(persisted), "lastMobile") || strings.Contains(string(persisted), `"mobile"`) {
+		t.Fatalf("persisted config still contains phone fields: %s", persisted)
 	}
 }

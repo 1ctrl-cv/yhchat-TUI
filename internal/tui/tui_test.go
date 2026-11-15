@@ -78,10 +78,14 @@ func TestEmailLoginFlow(t *testing.T) {
 	cmd := sendKey(t, app, tea.KeyEnter)
 	app.Update(waitFor[profileUserDataMsg](t, cmd))
 	view = app.View()
-	for _, want := range []string{"138****1234", "d***@yunhu.chat", "YH-TEST-0001", "这是测试简介"} {
+	for _, want := range []string{"d***@yunhu.chat", "YH-TEST-0001", "这是测试简介"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("profile detail missing %q\n%s", want, view)
 		}
+	}
+	// Phone numbers are never stored or shown, including the masked form.
+	if strings.Contains(view, "138****1234") || strings.Contains(view, "手机号") {
+		t.Errorf("profile detail shows a phone number:\n%s", view)
 	}
 }
 
@@ -142,9 +146,6 @@ func TestSMSLoginFlow(t *testing.T) {
 	}
 	if store.Data.Token != testToken || store.Data.LoginMethod != "sms" {
 		t.Fatalf("stored config = %+v", store.Data)
-	}
-	if store.Data.LastMobile != "138****1234" {
-		t.Fatalf("last mobile = %q", store.Data.LastMobile)
 	}
 
 	ts.mu.Lock()
@@ -494,40 +495,4 @@ func sendKeyRunes(t *testing.T, app *App, r rune) tea.Cmd {
 // storeTokenPresent reports whether a token is persisted in the config store.
 func storeTokenPresent(app *App) bool {
 	return app.store.Data.Token != ""
-}
-
-func TestLoginRemembersMaskedMobile(t *testing.T) {
-	ts := newTestServer(t)
-	store := &config.Store{
-		Path: t.TempDir() + "/config.json",
-		Data: config.Config{
-			DeviceID:    testDeviceID,
-			LoginMethod: "sms",
-			LastMobile:  "13800001234",
-			LastEmail:   testEmail,
-		},
-	}
-	client := api.New(testDeviceID)
-	client.BaseURL = ts.srv.URL
-	app := New(client, store)
-	app.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
-
-	if app.login.method != methodSMS {
-		t.Fatalf("method = %v, want SMS", app.login.method)
-	}
-	// The raw mobile number must not be prefilled; only a masked placeholder.
-	if got := app.login.phone.Value(); got != "" {
-		t.Fatalf("phone value = %q, want empty", got)
-	}
-	view := app.View()
-	if strings.Contains(view, "13800001234") {
-		t.Fatalf("login view leaks the raw mobile number:\\n%s", view)
-	}
-	if !strings.Contains(view, "138****1234") {
-		t.Fatalf("login view missing masked mobile placeholder:\\n%s", view)
-	}
-	// The email field may still be prefilled (convenience, no secret leak).
-	if got := app.login.email.Value(); got != testEmail {
-		t.Fatalf("email = %q, want %q", got, testEmail)
-	}
 }

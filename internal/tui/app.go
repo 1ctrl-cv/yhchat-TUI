@@ -288,11 +288,8 @@ func (a *App) handleAutoLogin(msg autoLoginMsg) (tea.Model, tea.Cmd) {
 func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 	a.store.Data.Token = msg.token
 	a.store.Data.LoginMethod = msg.method
-	switch msg.method {
-	case "sms":
-		// Store only the masked number: the login screen just needs it as a hint.
-		a.store.Data.LastMobile = maskPhone(msg.account)
-	case "email":
+	if msg.method == "email" {
+		// Email remains a convenience hint; phone numbers are never stored.
 		a.store.Data.LastEmail = msg.account
 	}
 	saveErr := a.store.Save()
@@ -304,8 +301,6 @@ func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.method == "email" {
 		account.Email = msg.account
-	} else if msg.method == "sms" {
-		account.Mobile = maskPhone(msg.account)
 	}
 	if msg.user != nil && msg.user.Data != nil {
 		account.Name = msg.user.Data.Name

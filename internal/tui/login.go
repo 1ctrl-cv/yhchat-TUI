@@ -94,7 +94,7 @@ func newLoginModel(client *api.Client, prefs config.Config) loginModel {
 		focus:     focusEmail,
 		email:     newTextInput("you@example.com", false, 128),
 		password:  newTextInput("password", true, 128),
-		phone:     newTextInput("13800000000", false, 11),
+		phone:     newTextInput("phone number", false, 11),
 		imageCode: newTextInput("captcha text", false, 16),
 		smsCode:   newTextInput("SMS code", false, 16),
 		spinner:   newSpinner(),
@@ -107,11 +107,7 @@ func newLoginModel(client *api.Client, prefs config.Config) loginModel {
 	if prefs.LastEmail != "" {
 		m.email.SetValue(prefs.LastEmail)
 	}
-	// The remembered mobile number is only shown as a masked placeholder: the
-	// input itself stays empty so the full number is never rendered on screen.
-	if prefs.LastMobile != "" {
-		m.phone.Placeholder = maskPhone(prefs.LastMobile)
-	}
+
 	return m
 }
 
@@ -266,7 +262,7 @@ func (m loginModel) Update(msg tea.Msg) (loginModel, tea.Cmd) {
 		m.stage = smsStageCode
 		m.smsCode.SetValue("")
 		m.errText = ""
-		m.okText = "短信验证码已发送至 " + maskPhone(strings.TrimSpace(m.phone.Value()))
+		m.okText = "短信验证码已发送"
 		m.focus = focusSMSCode
 		return m, m.applyFocus()
 
