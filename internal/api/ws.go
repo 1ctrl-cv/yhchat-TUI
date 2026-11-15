@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"yhchat-tui/internal/logging"
 )
 
 // wsGUID is the RFC 6455 handshake magic string.
@@ -50,6 +52,7 @@ const (
 	WSEventStream       WSEventKind = "stream_message"
 	WSEventInviteApply  WSEventKind = "invite_apply"
 	WSEventHeartbeatAck WSEventKind = "heartbeat_ack"
+	WSEventDraft        WSEventKind = "draft_input"
 	WSEventUnknown      WSEventKind = "unknown"
 )
 
@@ -61,6 +64,10 @@ type WSEvent struct {
 	Recall *RecallMessage
 	Stream *StreamMessage
 	Err    error
+
+	// Raw is the Any.value payload for events the chat layer decodes itself
+	// (currently draft_input).
+	Raw []byte
 }
 
 // WSLoginInfo is the payload of the WebSocket "login" command.
@@ -223,6 +230,7 @@ func (c *WSClient) session() error {
 	if err := conn.WriteJSON(loginPayload); err != nil {
 		return fmt.Errorf("WebSocket 登录失败: %w", err)
 	}
+	logging.Info("WebSocket 已连接: %s", c.URL)
 	c.emit(WSEvent{Kind: WSEventConnected})
 
 	// Heartbeat loop.
@@ -262,6 +270,7 @@ func (c *WSClient) session() error {
 		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		opcode, payload, readErr := conn.ReadMessage()
 		if readErr != nil {
+			logging.Info("WebSocket 连接结束: %v", readErr)
 			return readErr
 		}
 		if opcode == wsOpText {
@@ -269,6 +278,7 @@ func (c *WSClient) session() error {
 			continue
 		}
 		event := decodeWSEvent(payload)
+		logging.Debug("WebSocket 事件 cmd=%q kind=%s", event.Cmd, event.Kind)
 		select {
 		case c.events <- event:
 		case <-c.done:
@@ -325,6 +335,8 @@ func decodeWSEvent(payload []byte) WSEvent {
 		return WSEvent{Kind: WSEventHeartbeatAck, Cmd: wrapper.Cmd}
 	case cmd == "invite_apply":
 		return WSEvent{Kind: WSEventInviteApply, Cmd: wrapper.Cmd}
+	case cmd == "draft_input":
+		return WSEvent{Kind: WSEventDraft, Cmd: wrapper.Cmd, Raw: wrapper.Value}
 	default:
 		return WSEvent{Kind: WSEventUnknown, Cmd: wrapper.Cmd}
 	}

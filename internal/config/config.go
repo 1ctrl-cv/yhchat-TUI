@@ -36,6 +36,17 @@ var (
 	userConfigDir = os.UserConfigDir
 )
 
+// Account is one saved login (token + display information).
+type Account struct {
+	Token       string `json:"token"`
+	DeviceID    string `json:"deviceId,omitempty"`
+	LoginMethod string `json:"loginMethod,omitempty"` // "email" or "sms"
+	Email       string `json:"email,omitempty"`
+	Mobile      string `json:"mobile,omitempty"` // masked mobile number
+	Name        string `json:"name,omitempty"`
+	UserID      string `json:"userId,omitempty"`
+}
+
 // Config is the on-disk configuration.
 type Config struct {
 	Token    string `json:"token,omitempty"`
@@ -45,6 +56,9 @@ type Config struct {
 	LoginMethod string `json:"loginMethod,omitempty"` // "email" or "sms"
 	LastEmail   string `json:"lastEmail,omitempty"`
 	LastMobile  string `json:"lastMobile,omitempty"`
+
+	// Accounts holds every remembered login (multi-account support).
+	Accounts []Account `json:"accounts,omitempty"`
 }
 
 // Store owns the config file location and its loaded contents.
@@ -202,4 +216,98 @@ func newDeviceID() (string, error) {
 		return "", fmt.Errorf("生成设备 ID 失败: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+// AccountList returns all remembered accounts, synthesizing one from the
+// current token for configs written before multi-account support.
+func (s *Store) AccountList() []Account {
+	if s == nil {
+		return nil
+	}
+	accounts := append([]Account(nil), s.Data.Accounts...)
+	if s.Data.Token != "" {
+		found := false
+		for _, account := range accounts {
+			if account.Token == s.Data.Token {
+				found = true
+				break
+			}
+		}
+		if !found {
+			accounts = append([]Account{{
+				Token:       s.Data.Token,
+				DeviceID:    s.Data.DeviceID,
+				LoginMethod: s.Data.LoginMethod,
+				Email:       s.Data.LastEmail,
+				Mobile:      s.Data.LastMobile,
+			}}, accounts...)
+		}
+	}
+	return accounts
+}
+
+// ActiveAccount returns the account matching the current token.
+func (s *Store) ActiveAccount() (Account, bool) {
+	if s == nil || s.Data.Token == "" {
+		return Account{}, false
+	}
+	for _, account := range s.AccountList() {
+		if account.Token == s.Data.Token {
+			return account, true
+		}
+	}
+	return Account{}, false
+}
+
+// UpsertAccount adds or updates an account entry.
+func (s *Store) UpsertAccount(account Account) {
+	if s == nil || account.Token == "" {
+		return
+	}
+	if account.DeviceID == "" {
+		account.DeviceID = s.Data.DeviceID
+	}
+	for i := range s.Data.Accounts {
+		if s.Data.Accounts[i].Token == account.Token {
+			s.Data.Accounts[i] = account
+			return
+		}
+	}
+	s.Data.Accounts = append(s.Data.Accounts, account)
+}
+
+// RemoveAccount drops one account entry.
+func (s *Store) RemoveAccount(token string) {
+	if s == nil || token == "" {
+		return
+	}
+	kept := make([]Account, 0, len(s.Data.Accounts))
+	for _, account := range s.Data.Accounts {
+		if account.Token != token {
+			kept = append(kept, account)
+		}
+	}
+	s.Data.Accounts = kept
+}
+
+// SwitchAccount makes the given account the active one and updates the
+// convenience fields (token, device id, remembered login method/email/mobile).
+func (s *Store) SwitchAccount(token string) bool {
+	if s == nil || token == "" {
+		return false
+	}
+	for _, account := range s.AccountList() {
+		if account.Token != token {
+			continue
+		}
+		s.Data.Token = account.Token
+		if account.DeviceID != "" {
+			s.Data.DeviceID = account.DeviceID
+		}
+		s.Data.LoginMethod = account.LoginMethod
+		s.Data.LastEmail = account.Email
+		s.Data.LastMobile = account.Mobile
+		return true
+	}
+	return false
 }

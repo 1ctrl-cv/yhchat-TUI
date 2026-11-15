@@ -23,6 +23,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"yhchat-tui/internal/logging"
 )
 
 const (
@@ -247,11 +249,14 @@ func (c *Client) doRaw(ctx context.Context, method, path, token, contentType str
 	if client == nil {
 		client = &http.Client{Timeout: DefaultTimeout}
 	}
+	started := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		logging.Error("HTTP %s %s 失败（%s）: %v", method, path, logging.Duration(started), err)
 		return nil, nil, fmt.Errorf("请求失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	logging.Debug("HTTP %s %s -> %d（%s）", method, path, resp.StatusCode, logging.Duration(started))
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {

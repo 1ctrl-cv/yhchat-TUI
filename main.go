@@ -25,6 +25,7 @@ import (
 
 	"yhchat-tui/internal/api"
 	"yhchat-tui/internal/config"
+	"yhchat-tui/internal/logging"
 	"yhchat-tui/internal/tui"
 )
 
@@ -42,6 +43,14 @@ func main() {
 		fmt.Printf("  built:  %s\n", tui.BuildTime)
 		fmt.Printf("  go:     %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		return
+	}
+
+	if initErr := logging.Init(os.Getenv("YHCHAT_DEBUG") == "1"); initErr != nil {
+		fmt.Fprintf(os.Stderr, "日志提示: %v\n", initErr)
+	} else {
+		defer logging.Close()
+		logging.Info("启动 yhchat-tui %s (commit %s, %s/%s, server=%s)",
+			tui.Version, tui.Commit, runtime.GOOS, runtime.GOARCH, serverOrDefault(*serverURL))
 	}
 
 	server := *serverURL
@@ -64,7 +73,20 @@ func main() {
 
 	program := tea.NewProgram(tui.New(client, store), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, runErr := program.Run(); runErr != nil {
+		logging.Error("程序运行失败: %v", runErr)
 		fmt.Fprintf(os.Stderr, "程序运行失败: %v\n", runErr)
 		os.Exit(1)
 	}
+	logging.Info("正常退出")
+}
+
+// serverOrDefault returns the configured API base URL for logging.
+func serverOrDefault(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	if env := os.Getenv("YHCHAT_API_BASE"); env != "" {
+		return env
+	}
+	return api.DefaultBaseURL
 }
