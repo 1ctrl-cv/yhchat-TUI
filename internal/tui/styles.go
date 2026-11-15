@@ -102,6 +102,7 @@ var (
 	convTimeStyle            = lipgloss.NewStyle().Foreground(colorMuted)
 	convPreviewStyle         = lipgloss.NewStyle().Foreground(colorMuted)
 	unreadBadgeStyle         = lipgloss.NewStyle().Bold(true).Foreground(colorAccent)
+	mentionBadgeStyle        = lipgloss.NewStyle().Bold(true).Foreground(colorWarn)
 	chatTitleStyle           = lipgloss.NewStyle().Bold(true).Foreground(colorText)
 	chatSubtitleStyle        = lipgloss.NewStyle().Foreground(colorMuted)
 	messageNameStyle         = lipgloss.NewStyle().Foreground(colorMuted)

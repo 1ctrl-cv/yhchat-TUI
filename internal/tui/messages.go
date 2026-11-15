@@ -106,6 +106,15 @@ type notificationsDismissedMsg struct {
 	err    error
 }
 
+// switchAccountMsg asks the App to switch the active login account.
+type switchAccountMsg struct{ token string }
+
+// addAccountMsg asks the App to open the login screen to add another account.
+type addAccountMsg struct{}
+
+// deleteAccountMsg asks the App to forget one saved account.
+type deleteAccountMsg struct{ token string }
+
 // openContactChatMsg asks the App to open a chat with a contact/group/bot.
 type openContactChatMsg struct {
 	chatID    string

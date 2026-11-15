@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -11,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"yhchat-tui/internal/api"
+	"yhchat-tui/internal/config"
 )
 
 // profileFocus identifies the focused pane of the "我的" page.
@@ -38,6 +40,7 @@ const (
 	detailPlaceholderCreateGroup
 	detailPlaceholderCreateBot
 	detailPlaceholderBotConsole
+	detailAccounts
 )
 
 // profileMenuItem is one row of the profile menu.
@@ -59,6 +62,7 @@ var profileMenuItems = []profileMenuItem{
 	{Label: "机器人控制台", Detail: detailPlaceholderBotConsole, Hint: "后续版本支持"},
 	{Label: "设置", Detail: detailSettings, Hint: "配置文件与登录状态"},
 	{Label: "关于", Detail: detailAbout, Hint: "作者与项目信息"},
+	{Label: "切换账号", Detail: detailAccounts, Hint: "多账号管理"},
 	{Label: "退出登录", Detail: detailLogoutConfirm, Hint: "清除本地 token"},
 }
 
@@ -104,6 +108,10 @@ type homeModel struct {
 	userDataGender    int  // 1 male, 2 female, 3 other
 	userDataTabsFocus bool // focus is on the gender tabs
 
+	// multi-account state
+	accounts     []config.Account
+	accountIndex int
+
 	userData *api.UserData
 
 	configPathText string
@@ -136,6 +144,15 @@ func (m homeModel) withUser(user *api.UserInfo) homeModel {
 func (m homeModel) withAccountInfo(configPath, deviceID string) homeModel {
 	m.configPathText = configPath
 	m.deviceIDText = deviceID
+	return m
+}
+
+// withAccounts attaches the saved login accounts for the switch-account page.
+func (m homeModel) withAccounts(accounts []config.Account) homeModel {
+	m.accounts = accounts
+	if m.accountIndex >= len(accounts) {
+		m.accountIndex = maxInt(0, len(accounts)-1)
+	}
 	return m
 }
 
@@ -191,6 +208,16 @@ func editAvatarCmd(client *api.Client, token, avatarURL string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 		return profileActionDoneMsg{kind: detailFormAvatar, err: client.EditAvatar(ctx, token, avatarURL), success: "头像已更新"}
+	}
+}
+
+// uploadAvatarCmd uploads a local image and sets it as the avatar.
+func uploadAvatarCmd(client *api.Client, token, localPath string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*requestTimeout)
+		defer cancel()
+		_, err := client.UploadAndEditAvatar(ctx, token, localPath)
+		return profileActionDoneMsg{kind: detailFormAvatar, err: err, success: "头像已更新"}
 	}
 }
 
@@ -483,6 +510,44 @@ func (m homeModel) handleDetailKey(key string, msg tea.KeyMsg) (homeModel, tea.C
 		return m, nil
 	}
 
+	if m.detail == detailAccounts {
+		switch key {
+		case "up":
+			if m.accountIndex > 0 {
+				m.accountIndex--
+			}
+			return m, nil
+		case "down":
+			if m.accountIndex < len(m.accounts)-1 {
+				m.accountIndex++
+			}
+			return m, nil
+		case "enter":
+			if m.accountIndex < 0 || m.accountIndex >= len(m.accounts) {
+				return m, nil
+			}
+			account := m.accounts[m.accountIndex]
+			if account.Token == m.token {
+				m.okText = "已经是当前账号"
+				return m, nil
+			}
+			return m, func() tea.Msg { return switchAccountMsg{token: account.Token} }
+		case "a":
+			return m, func() tea.Msg { return addAccountMsg{} }
+		case "d":
+			if m.accountIndex < 0 || m.accountIndex >= len(m.accounts) {
+				return m, nil
+			}
+			token := m.accounts[m.accountIndex].Token
+			return m, func() tea.Msg { return deleteAccountMsg{token: token} }
+		case "esc":
+			m.detail = detailEmpty
+			m.focus = profileMenu
+			return m, nil
+		}
+		return m, nil
+	}
+
 	switch key {
 	case "esc":
 		m.detail = detailEmpty
@@ -554,6 +619,15 @@ func (m homeModel) openDetail() (homeModel, tea.Cmd) {
 	case detailFormAvatar:
 		m.initFields([]fieldSpec{{Placeholder: "https://.../avatar.png"}})
 		return m, m.applyFieldFocus()
+	case detailAccounts:
+		m.accountIndex = 0
+		for i, account := range m.accounts {
+			if account.Token == m.token {
+				m.accountIndex = i
+				break
+			}
+		}
+		return m, nil
 	case detailFormAddFriend:
 		m.addFriendType = 0
 		m.addFriendTabsFocus = false
@@ -689,16 +763,24 @@ func (m homeModel) submitForm() (homeModel, tea.Cmd) {
 		}
 		return m, tea.Batch(m.spinner.Tick, editNicknameCmd(m.client, m.token, name))
 	case detailFormAvatar:
-		avatarURL := strings.TrimSpace(m.fields[0].Value())
-		if avatarURL == "" {
-			m.errText = "头像 URL 不能为空"
+		avatar := strings.TrimSpace(m.fields[0].Value())
+		if avatar == "" {
+			m.errText = "头像 URL 或图片路径不能为空"
 			return m, nil
 		}
 		m.loading = true
-		if m.user != nil && m.user.Data != nil {
-			m.user.Data.AvatarURL = avatarURL
+		if strings.HasPrefix(avatar, "http://") || strings.HasPrefix(avatar, "https://") {
+			if m.user != nil && m.user.Data != nil {
+				m.user.Data.AvatarURL = avatar
+			}
+			return m, tea.Batch(m.spinner.Tick, editAvatarCmd(m.client, m.token, avatar))
 		}
-		return m, tea.Batch(m.spinner.Tick, editAvatarCmd(m.client, m.token, avatarURL))
+		if info, err := os.Stat(avatar); err == nil && !info.IsDir() {
+			return m, tea.Batch(m.spinner.Tick, uploadAvatarCmd(m.client, m.token, avatar))
+		}
+		m.loading = false
+		m.errText = "请输入 http(s) 图片 URL 或存在的本地图片路径"
+		return m, nil
 	case detailFormAddFriend:
 		chatID := strings.TrimSpace(m.fields[0].Value())
 		verifyMessage := strings.TrimSpace(m.fields[1].Value())
@@ -984,6 +1066,25 @@ func (m homeModel) detailColumn(bodyH, width int) []string {
 		if m.loading {
 			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Left, m.spinner.View(), " 提交中…"))
 		}
+	case detailAccounts:
+		lines = append(lines, titleAccentStyle.Render("切换账号"), "")
+		if len(m.accounts) == 0 {
+			lines = append(lines, hintStyle.Render(" 暂无已保存的账号"))
+		}
+		for i, account := range m.accounts {
+			marker := "  "
+			style := valueStyle
+			if i == m.accountIndex {
+				marker = lipgloss.NewStyle().Foreground(colorAccent).Render("▌ ")
+				style = convSelectedStyle
+			}
+			label := accountLabel(account)
+			if account.Token == m.token {
+				label += "（当前）"
+			}
+			lines = append(lines, marker+style.Render(truncate(label, maxInt(8, width-3))))
+		}
+		lines = append(lines, "", hintStyle.Render(truncate(" Enter 切换 · a 添加账号 · d 删除账号 · Esc 返回", maxInt(8, width-2))))
 	case detailLogoutConfirm:
 		lines = append(lines, titleAccentStyle.Render("退出登录"), "")
 		lines = append(lines, hintStyle.Render(truncate("  Enter / l 确认退出并清除本地 token", maxInt(8, width-2))))
@@ -1098,6 +1199,18 @@ func (m homeModel) handleMouse(msg tea.MouseMsg) (homeModel, tea.Cmd) {
 	}
 	if m.detail == detailUserData && y == bodyH-1 {
 		return m.openUserDataEdit()
+	}
+	if m.detail == detailAccounts && y >= 2 {
+		index := y - 2
+		if index >= 0 && index < len(m.accounts) {
+			m.accountIndex = index
+			account := m.accounts[index]
+			if account.Token == m.token {
+				m.okText = "已经是当前账号"
+				return m, nil
+			}
+			return m, func() tea.Msg { return switchAccountMsg{token: account.Token} }
+		}
 	}
 	return m, nil
 }
@@ -1413,6 +1526,23 @@ func (m homeModel) addFriendDialog(bodyH, width int) []string {
 	return out
 }
 
+// accountLabel returns a display label for one saved account.
+func accountLabel(account config.Account) string {
+	if strings.TrimSpace(account.Name) != "" {
+		return account.Name
+	}
+	if account.Email != "" {
+		return account.Email
+	}
+	if account.Mobile != "" {
+		return account.Mobile
+	}
+	if account.UserID != "" {
+		return "ID " + account.UserID
+	}
+	return "账号"
+}
+
 // detailRow renders a label/value row inside the detail pane.
 func (m homeModel) detailRow(width int, label, value string) string {
 	const labelW = 10
@@ -1440,7 +1570,7 @@ func (m homeModel) formHint() string {
 	case detailFormNickname:
 		return "输入新的昵称后按 Enter 提交"
 	case detailFormAvatar:
-		return "输入新的头像图片 URL（http/https）"
+		return "输入头像图片 URL 或本地图片路径（如 C:\\\\Pictures\\\\a.png）"
 	case detailFormAddFriend:
 		return "输入用户、群或机器人的 ID"
 	}
@@ -1453,7 +1583,7 @@ func (m homeModel) formFieldLabel(index int) string {
 	case detailFormNickname:
 		return "昵称"
 	case detailFormAvatar:
-		return "头像 URL"
+		return "头像 URL / 路径"
 	case detailFormAddFriend:
 		if index == 0 {
 			return "ID"
@@ -1492,6 +1622,9 @@ func (m homeModel) viewHints() string {
 		}
 		if m.detail == detailUserData {
 			return "Enter 修改资料 · Esc 返回菜单 · Tab 切换焦点"
+		}
+		if m.detail == detailAccounts {
+			return "↑↓ 选择账号 · Enter 切换 · a 添加账号 · d 删除账号 · Esc 返回"
 		}
 		return "Enter 确认 · Esc 返回菜单 · Tab 切换焦点"
 	default:

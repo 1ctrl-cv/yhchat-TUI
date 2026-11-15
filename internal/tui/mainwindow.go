@@ -68,6 +68,37 @@ type mainWindowModel struct {
 	loadingOlder   bool
 	pendingText    string
 	lastLoadedChat string
+	pendingChatID  string
+	pendingMsgID   string
+
+	// One-entry render cache for the message history (large-list performance).
+	cacheLines    []string
+	cacheStarts   []int
+	cacheVersion  int
+	cacheChatID   string
+	cacheWidth    int
+	cacheSelected int
+	msgVersion    int
+
+	// Message operations (selection, quote, overlays, drafts).
+	overlay        chatOverlay
+	overlayInput   textinput.Model
+	overlayIndex   int
+	overlayOffset  int
+	overlayLoading bool
+	overlayErr     string
+	selectedMsg    int
+	quoteMsg       *api.Message
+	forwardTargets []api.Conversation
+	searchResults  []api.SearchResult
+	groupInfo      *api.GroupInfo
+	groupMembers   []api.GroupMember
+	groupTotal     int
+	groupPage      int
+	userProfile    *api.UserProfile
+	drafts         map[string]string
+	draftChatID    string
+	lastDraftMs    int64
 
 	ws              *api.WSClient
 	wsConnected     bool
@@ -245,11 +276,19 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 			return m, m.handleErr(msg.err, "加载消息失败")
 		}
 		m.messages[msg.chatID] = msg.messages
+		m.invalidateMessageLines()
 		m.msgHasMore[msg.chatID] = len(msg.messages) >= chatHistoryPageSize
 		m.lastLoadedChat = msg.chatID
 		m.errText = ""
 		m.msgFollow = true
 		m.msgOffset = 0
+		m.selectedMsg = len(msg.messages) - 1
+		if conv := m.selectedConv(); conv != nil && conv.ChatID == msg.chatID {
+			m.draftChatID = msg.chatID
+			if draft, ok := m.drafts[msg.chatID]; ok && strings.TrimSpace(m.input.Value()) == "" {
+				m.input.SetValue(draft)
+			}
+		}
 		// Opening a conversation marks it as read.
 		return m, m.markConversationRead(msg.chatID)
 
@@ -277,6 +316,10 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 		}
 		oldLines := len(m.messageLines())
 		m.messages[msg.chatID] = append(older, existing...)
+		m.invalidateMessageLines()
+		if m.selectedMsg >= 0 {
+			m.selectedMsg += len(older)
+		}
 		newLines := len(m.messageLines())
 		m.msgFollow = false
 		if delta := newLines - oldLines; delta > 0 {
@@ -301,6 +344,7 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 				history[i].Content = api.MessageContent{}
 			}
 		}
+		m.invalidateMessageLines()
 		m.okText = "消息已撤回"
 		m.errText = ""
 		return m, nil
@@ -314,6 +358,9 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 
 	case messageSentMsg:
 		m.sending = false
+		m.removePendingMessage(m.pendingChatID, m.pendingMsgID)
+		m.pendingChatID = ""
+		m.pendingMsgID = ""
 		if msg.err != nil {
 			m.errText = api.FriendlyMessage(msg.err)
 			if m.pendingText != "" {
@@ -334,13 +381,36 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case forwardDoneMsg, searchDoneMsg, groupInfoLoadedMsg, userProfileLoadedMsg, imageSentMsg:
+		return m.handleOverlayMessage(msg)
+
+	case mediaCachedMsg:
+		if msg.err != nil {
+			m.errText = api.FriendlyMessage(msg.err)
+			return m, nil
+		}
+		m.okText = "已缓存到 " + msg.path
+		m.errText = ""
+		return m, nil
+
 	case tea.MouseMsg:
+		if m.overlay != overlayNone {
+			return m.handleOverlayMouse(msg)
+		}
 		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
+		if m.overlay != overlayNone {
+			return m.handleOverlayKey(msg)
+		}
 		return m.handleKey(msg)
 
 	default:
+		if m.overlay == overlaySearch || m.overlay == overlayImageSend {
+			var cmd tea.Cmd
+			m.overlayInput, cmd = m.overlayInput.Update(msg)
+			return m, cmd
+		}
 		// Cursor blink / paste for the focused text input.
 		var cmd tea.Cmd
 		switch m.focus {
@@ -442,27 +512,19 @@ func (m mainWindowModel) handleSearchKey(key string, msg tea.KeyMsg) (mainWindow
 func (m mainWindowModel) handleConversationsKey(key string) (mainWindowModel, tea.Cmd) {
 	switch key {
 	case "up":
-		m.moveSelection(-1)
-		return m, m.ensureMessagesCmd()
+		return m, m.moveSelectionWithDraft(-1)
 	case "down":
-		m.moveSelection(1)
-		return m, m.ensureMessagesCmd()
+		return m, m.moveSelectionWithDraft(1)
 	case "pgup":
-		m.moveSelection(-m.conversationPageSize())
-		return m, m.ensureMessagesCmd()
+		return m, m.moveSelectionWithDraft(-m.conversationPageSize())
 	case "pgdown":
-		m.moveSelection(m.conversationPageSize())
-		return m, m.ensureMessagesCmd()
+		return m, m.moveSelectionWithDraft(m.conversationPageSize())
 	case "home", "g":
-		m.selected = 0
-		m.ensureVisibleSelection()
-		return m, m.ensureMessagesCmd()
+		delta := -m.selected
+		return m, m.moveSelectionWithDraft(delta)
 	case "end", "G":
-		if len(m.filtered) > 0 {
-			m.selected = len(m.filtered) - 1
-		}
-		m.ensureVisibleSelection()
-		return m, m.ensureMessagesCmd()
+		delta := len(m.filtered) - 1 - m.selected
+		return m, m.moveSelectionWithDraft(delta)
 	case "enter":
 		if conv := m.selectedConv(); conv != nil {
 			m.setFocus(focusInput)
@@ -483,32 +545,48 @@ func (m mainWindowModel) handleConversationsKey(key string) (mainWindowModel, te
 
 // handleMessagesKey handles scrolling in the message history.
 func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd) {
-	page := m.messagePageSize()
 	switch key {
 	case "up":
-		if m.atMessageTop() {
+		if m.selectedMsg <= 0 {
 			return m.loadOlderMessages()
 		}
-		m.scrollMessages(-1)
+		m.moveMsgSelection(-1)
 	case "down":
-		m.scrollMessages(1)
+		m.moveMsgSelection(1)
 	case "pgup":
-		if m.atMessageTop() {
+		if m.selectedMsg <= 0 {
 			return m.loadOlderMessages()
 		}
-		m.scrollMessages(-page)
+		m.moveMsgSelection(-6)
 	case "pgdown":
-		m.scrollMessages(page)
-	case "end", "G":
-		m.msgFollow = true
+		m.moveMsgSelection(6)
 	case "home", "g":
-		m.msgFollow = false
-		m.msgOffset = 0
+		m.selectedMsg = 0
+		m.ensureSelectedVisible()
+	case "end", "G":
+		if conv := m.selectedConv(); conv != nil {
+			m.selectedMsg = maxInt(0, len(m.messages[conv.ChatID])-1)
+		}
+		m.msgFollow = true
 	case "enter":
 		m.setFocus(focusInput)
 		return m, m.applyFocus()
+	case "q":
+		return m.quoteSelectedMessage()
+	case "f":
+		return m.openForwardOverlay()
+	case "s":
+		return m.openSearchOverlay()
+	case "i":
+		return m.openInfoOverlay()
+	case "p", "ctrl+o":
+		return m.openImageOverlay()
+	case "o":
+		if message := m.selectedMessage(); message != nil {
+			return m, cacheMediaCommand(*message)
+		}
 	case "x":
-		return m.recallLastOwnMessage()
+		return m.recallSelectedMessage()
 	case "esc", "left":
 		m.setFocus(focusConversations)
 		return m, m.applyFocus()
@@ -519,6 +597,31 @@ func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd
 		}
 	}
 	return m, nil
+}
+
+// quoteSelectedMessage starts a quoted reply to the highlighted message.
+func (m mainWindowModel) quoteSelectedMessage() (mainWindowModel, tea.Cmd) {
+	message := m.selectedMessage()
+	if message == nil || message.Recalled || message.Pending {
+		m.errText = "请选择一条可引用的消息"
+		return m, nil
+	}
+	quoted := *message
+	m.quoteMsg = &quoted
+	m.setFocus(focusInput)
+	m.errText = ""
+	m.okText = "已引用消息，输入回复后发送"
+	return m, m.applyFocus()
+}
+
+// recallSelectedMessage recalls the highlighted own message.
+func (m mainWindowModel) recallSelectedMessage() (mainWindowModel, tea.Cmd) {
+	message := m.selectedMessage()
+	conv := m.selectedConv()
+	if message != nil && conv != nil && message.IsOwn() && !message.Recalled && !message.Pending {
+		return m, recallMessagesCmd(m.client, m.token, conv.ChatID, conv.ChatType, []string{message.MsgID})
+	}
+	return m.recallLastOwnMessage()
 }
 
 // recallLastOwnMessage recalls the newest own, non-recalled message.
@@ -544,16 +647,26 @@ func (m mainWindowModel) handleInputKey(key string, msg tea.KeyMsg) (mainWindowM
 	switch key {
 	case "enter":
 		return m.sendCurrent()
+	case "ctrl+o":
+		return m.openImageOverlay()
 	case "esc":
+		if m.quoteMsg != nil {
+			m.quoteMsg = nil
+			m.okText = "已取消引用"
+			return m, nil
+		}
 		m.setFocus(focusMessages)
 		return m, m.applyFocus()
 	case "up":
 		m.setFocus(focusMessages)
-		m.scrollMessages(-1)
+		m.moveMsgSelection(-1)
 		return m, m.applyFocus()
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	if draftCmd := m.maybeSyncDraft(); draftCmd != nil {
+		cmd = tea.Batch(cmd, draftCmd)
+	}
 	return m, cmd
 }
 
@@ -687,12 +800,58 @@ func (m mainWindowModel) sendCurrent() (mainWindowModel, tea.Cmd) {
 		m.errText = "请先选择一个会话"
 		return m, nil
 	}
+	content := api.MessageContent{Text: text, MentionedIDs: extractMentions(text)}
+	quoteID := ""
+	if m.quoteMsg != nil {
+		quoteID = m.quoteMsg.MsgID
+		content.QuoteMsgText = m.quoteMsg.Preview()
+	}
 	m.sending = true
 	m.pendingText = text
 	m.input.SetValue("")
+	m.quoteMsg = nil
 	m.errText = ""
 	m.okText = ""
-	return m, tea.Batch(m.spinner.Tick, sendTextCmd(m.client, m.token, *conv, text))
+	nowMs := uint64(timeNow().UnixMilli())
+	pendingID := fmt.Sprintf("local-%d", timeNow().UnixNano())
+	pending := api.Message{
+		MsgID:       pendingID,
+		Direction:   "right",
+		ContentType: api.ContentTypeText,
+		Content:     content,
+		TimestampMs: nowMs,
+		Pending:     true,
+	}
+	if m.user != nil && m.user.Data != nil {
+		pending.Sender.ID = m.user.Data.ID
+		pending.Sender.Name = m.user.Data.Name
+	}
+	m.messages[conv.ChatID] = append(m.messages[conv.ChatID], pending)
+	m.trimHistory(conv.ChatID)
+	m.selectedMsg = len(m.messages[conv.ChatID]) - 1
+	m.pendingChatID = conv.ChatID
+	m.pendingMsgID = pendingID
+	m.msgFollow = true
+	m.invalidateMessageLines()
+	return m, tea.Batch(m.spinner.Tick,
+		sendMessageOptionsCmd(m.client, m.token, *conv, content, api.ContentTypeText, quoteID),
+		m.clearDraftCmd(conv.ChatID))
+}
+
+// clearDraftCmd deletes the local draft and clears it on the server.
+func (m mainWindowModel) clearDraftCmd(chatID string) tea.Cmd {
+	if chatID == "" {
+		return nil
+	}
+	delete(m.drafts, chatID)
+	if m.ws == nil {
+		return nil
+	}
+	ws := m.ws
+	return func() tea.Msg {
+		_ = ws.SendInputInfo(chatID, "", "")
+		return nil
+	}
 }
 
 // appendOwnMessage appends a locally sent message and updates the conversation
@@ -875,8 +1034,25 @@ func (m mainWindowModel) handleWSEvent(event api.WSEvent) (mainWindowModel, tea.
 		}
 	case api.WSEventInviteApply:
 		m.okText = "收到新的好友/群邀请"
+	case api.WSEventDraft:
+		if draft, err := api.DecodeDraftInput(event.Raw); err == nil {
+			m.applyRemoteDraft(draft)
+		}
 	}
 	return m, nil
+}
+
+// applyRemoteDraft merges a draft pushed from another device.
+func (m *mainWindowModel) applyRemoteDraft(draft *api.DraftInput) {
+	if draft == nil || draft.ChatID == "" {
+		return
+	}
+	if draft.ChatID == m.draftChatID && strings.TrimSpace(m.input.Value()) == "" {
+		m.input.SetValue(draft.Input)
+		m.okText = "已同步草稿"
+		return
+	}
+	m.drafts[draft.ChatID] = draft.Input
 }
 
 // messageFromPush converts a PushMessage into a Message.
@@ -918,7 +1094,9 @@ func (m *mainWindowModel) applyPush(p api.PushMessage) (mainWindowModel, tea.Cmd
 		}
 		if !replaced {
 			m.messages[p.ChatID] = append(history, message)
+			m.trimHistory(p.ChatID)
 		}
+		m.invalidateMessageLines()
 	}
 
 	active := m.selectedConv() != nil && m.selectedConv().ChatID == p.ChatID
@@ -980,6 +1158,7 @@ func (m *mainWindowModel) applyEdit(p api.PushMessage) (mainWindowModel, tea.Cmd
 			history[i].Content = p.Content
 			history[i].ContentType = p.ContentType
 			history[i].Edited = true
+			m.invalidateMessageLines()
 			if chatID == p.ChatID {
 				m.updateConversationPreview(chatID, history[i].Preview())
 			}
@@ -1011,6 +1190,7 @@ func (m *mainWindowModel) applyRecall(recall api.RecallMessage) (mainWindowModel
 		history[i].Recalled = true
 		history[i].Content = api.MessageContent{}
 		anyRecalled = true
+		m.invalidateMessageLines()
 	}
 	if anyRecalled && len(history) > 0 && ids[history[len(history)-1].MsgID] {
 		m.updateConversationPreview(recall.ChatID, "撤回了一条消息")
@@ -1026,6 +1206,7 @@ func (m *mainWindowModel) applyStream(stream *api.StreamMessage) (mainWindowMode
 			continue
 		}
 		history[i].Content.Text += stream.Content
+		m.invalidateMessageLines()
 		if i == len(history)-1 {
 			m.updateConversationPreview(stream.ChatID, history[i].Preview())
 		}
@@ -1078,6 +1259,134 @@ func (m mainWindowModel) conversationPageSize() int {
 // messagePageSize returns the message scroll page size.
 func (m mainWindowModel) messagePageSize() int {
 	return maxInt(1, m.messageViewportHeight()-1)
+}
+
+// sendMessageOptionsCmd sends text with quote/@ options.
+func sendMessageOptionsCmd(client *api.Client, token string, conv api.Conversation, content api.MessageContent, contentType int32, quoteID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		msgID, err := client.SendMessageWithOptions(ctx, token, conv.ChatID, conv.ChatType, content, contentType, quoteID)
+		return messageSentMsg{chatID: conv.ChatID, msgID: msgID, text: content.Text, err: err}
+	}
+}
+
+// extractMentions parses "@123456" tokens into mentioned user IDs.
+func extractMentions(text string) []string {
+	var ids []string
+	seen := map[string]bool{}
+	for _, field := range strings.Fields(text) {
+		if !strings.HasPrefix(field, "@") || len(field) < 2 {
+			continue
+		}
+		id := strings.TrimRight(field[1:], ",.，。:：;；!！?？")
+		if id == "" || seen[id] {
+			continue
+		}
+		digitOnly := true
+		for _, r := range id {
+			if r < '0' || r > '9' {
+				digitOnly = false
+				break
+			}
+		}
+		if !digitOnly {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// draftFlushCmd pushes the current input as a WebSocket draft.
+func (m mainWindowModel) draftFlushCmd() tea.Cmd {
+	if m.ws == nil || m.draftChatID == "" {
+		return nil
+	}
+	ws := m.ws
+	chatID := m.draftChatID
+	input := m.input.Value()
+	return func() tea.Msg {
+		_ = ws.SendInputInfo(chatID, input, "")
+		return nil
+	}
+}
+
+// maybeSyncDraft pushes the draft at most once per second while typing.
+func (m *mainWindowModel) maybeSyncDraft() tea.Cmd {
+	if m.ws == nil || m.draftChatID == "" {
+		return nil
+	}
+	nowMs := timeNow().UnixMilli()
+	if nowMs-m.lastDraftMs < 900 {
+		return nil
+	}
+	m.lastDraftMs = nowMs
+	ws := m.ws
+	chatID := m.draftChatID
+	input := m.input.Value()
+	return func() tea.Msg {
+		_ = ws.SendInputInfo(chatID, input, "")
+		return nil
+	}
+}
+
+// moveSelectionWithDraft flushes the current draft and loads the new chat.
+func (m *mainWindowModel) moveSelectionWithDraft(delta int) tea.Cmd {
+	flush := m.draftFlushCmd()
+	m.moveSelection(delta)
+	return tea.Batch(flush, m.ensureMessagesCmd())
+}
+
+// moveMsgSelection moves the highlighted message and keeps it visible.
+func (m *mainWindowModel) moveMsgSelection(delta int) {
+	conv := m.selectedConv()
+	if conv == nil {
+		return
+	}
+	history := m.messages[conv.ChatID]
+	if len(history) == 0 {
+		m.selectedMsg = -1
+		return
+	}
+	if m.selectedMsg < 0 || m.selectedMsg >= len(history) {
+		m.selectedMsg = len(history) - 1
+	}
+	m.selectedMsg = clamp(m.selectedMsg+delta, 0, len(history)-1)
+	m.ensureSelectedVisible()
+}
+
+// ensureSelectedVisible scrolls the viewport to the selected message.
+func (m *mainWindowModel) ensureSelectedVisible() {
+	conv := m.selectedConv()
+	if conv == nil || m.selectedMsg < 0 {
+		return
+	}
+	lines := m.messageLines()
+	if m.selectedMsg >= len(m.cacheStarts) {
+		return
+	}
+	start := m.cacheStarts[m.selectedMsg]
+	end := len(lines)
+	if m.selectedMsg+1 < len(m.cacheStarts) {
+		end = m.cacheStarts[m.selectedMsg+1]
+	}
+	height := m.messageViewportHeight()
+	maxOffset := maxInt(0, len(lines)-height)
+	offset := m.msgOffset
+	if m.msgFollow {
+		offset = maxOffset
+	}
+	if start < offset {
+		offset = start
+	}
+	if end > offset+height {
+		offset = end - height
+	}
+	offset = clamp(offset, 0, maxOffset)
+	m.msgOffset = offset
+	m.msgFollow = offset >= maxOffset
 }
 
 // handleMouse handles click and wheel events in the chat window.
@@ -1149,6 +1458,26 @@ func (m mainWindowModel) handleMouse(msg tea.MouseMsg) (mainWindowModel, tea.Cmd
 	}
 	if y >= viewportTop {
 		m.setFocus(focusMessages)
+		lines := m.messageLines()
+		height := m.messageViewportHeight()
+		maxOffset := maxInt(0, len(lines)-height)
+		offset := m.msgOffset
+		if m.msgFollow {
+			offset = maxOffset
+		}
+		clickedLine := y - viewportTop + offset
+		index := 0
+		for i, start := range m.cacheStarts {
+			if start <= clickedLine {
+				index = i
+			} else {
+				break
+			}
+		}
+		if len(m.cacheStarts) > 0 {
+			m.selectedMsg = index
+			m.ensureSelectedVisible()
+		}
 		return m, m.applyFocus()
 	}
 	return m, nil
@@ -1177,8 +1506,16 @@ func (m mainWindowModel) conversationViewportHeight() int {
 
 // messageViewportHeight returns the number of visible message lines.
 func (m mainWindowModel) messageViewportHeight() int {
-	// header (1) + separator (1) + separator (1) + input (1)
-	return maxInt(3, m.bodyHeight()-4)
+	// header (1) + separator (1) + input (2); a quote preview adds one row.
+	return maxInt(3, m.bodyHeight()-4-m.quoteExtra())
+}
+
+// quoteExtra returns the extra rows used by the active quote preview.
+func (m mainWindowModel) quoteExtra() int {
+	if m.quoteMsg != nil {
+		return 1
+	}
+	return 0
 }
 
 // convPanelWidth returns the conversation panel width.
@@ -1200,6 +1537,9 @@ func (m mainWindowModel) View() string {
 	inner := width - 2*chromePadX
 	bodyH := maxInt(8, height-4)
 
+	if m.overlay != overlayNone {
+		return m.overlayView()
+	}
 	body := m.bodyLines(inner, bodyH)
 	// The dot in the top-right corner doubles as the realtime connection
 	// indicator: green when connected, yellow while reconnecting.
@@ -1314,8 +1654,16 @@ func (m mainWindowModel) conversationRow(conv api.Conversation, selected bool, w
 	}
 	badge := ""
 	badgeWidth := 0
+	if conv.At {
+		badge = mentionBadgeStyle.Render("@")
+		badgeWidth = lipgloss.Width(badge) + 1
+	}
 	if conv.Unread > 0 {
-		badge = unreadBadgeStyle.Render(fmt.Sprintf("[%d]", conv.Unread))
+		unread := unreadBadgeStyle.Render(fmt.Sprintf("[%d]", conv.Unread))
+		if badge != "" {
+			badge += " "
+		}
+		badge += unread
 		badgeWidth = lipgloss.Width(badge) + 1
 	}
 	previewWidth := maxInt(4, width-2-badgeWidth)
@@ -1374,9 +1722,13 @@ func (m mainWindowModel) chatLines(bodyH, width int) []string {
 	lines = append(lines, separator(width))
 
 	// Message viewport.
-	height := maxInt(3, bodyH-4)
+	height := maxInt(3, bodyH-4-m.quoteExtra())
 	viewport := m.messageViewport(height, width)
 	lines = append(lines, viewport...)
+	if m.quoteMsg != nil {
+		quote := " 引用回复: " + truncate(m.quoteMsg.Preview(), maxInt(8, width-12)) + "  （Esc 取消引用）"
+		lines = append(lines, hintStyle.Render(truncate(quote, width)))
+	}
 
 	// Input box: the underline style renders two lines (text + rule).
 	input := m.input
@@ -1421,17 +1773,72 @@ func (m mainWindowModel) messageViewport(height, width int) []string {
 }
 
 // messageLines renders the whole message history for the selected chat.
-func (m mainWindowModel) messageLines() []string {
+func (m *mainWindowModel) messageLines() []string {
 	conv := m.selectedConv()
 	if conv == nil {
 		return nil
 	}
-	messages := m.messages[conv.ChatID]
 	width := m.chatWidth()
+	if m.cacheLines != nil && m.cacheVersion == m.msgVersion &&
+		m.cacheChatID == conv.ChatID && m.cacheWidth == width &&
+		m.cacheSelected == m.selectedMsg {
+		return m.cacheLines
+	}
+	lines, starts := m.buildMessageLines(conv, width)
+	m.cacheLines = lines
+	m.cacheStarts = starts
+	m.cacheVersion = m.msgVersion
+	m.cacheChatID = conv.ChatID
+	m.cacheWidth = width
+	m.cacheSelected = m.selectedMsg
+	return lines
+}
+
+// invalidateMessageLines drops the render cache after history changes.
+func (m *mainWindowModel) invalidateMessageLines() {
+	m.msgVersion++
+	m.cacheLines = nil
+}
+
+// removePendingMessage drops a locally pending message after delivery.
+func (m *mainWindowModel) removePendingMessage(chatID, pendingID string) {
+	if chatID == "" || pendingID == "" {
+		return
+	}
+	history := m.messages[chatID]
+	kept := make([]api.Message, 0, len(history))
+	for _, message := range history {
+		if message.MsgID != pendingID {
+			kept = append(kept, message)
+		}
+	}
+	m.messages[chatID] = kept
+	m.invalidateMessageLines()
+}
+
+// trimHistory bounds the in-memory history per conversation.
+func (m *mainWindowModel) trimHistory(chatID string) {
+	const maxHistory = 600
+	history := m.messages[chatID]
+	if len(history) <= maxHistory {
+		return
+	}
+	trimmed := make([]api.Message, maxHistory)
+	copy(trimmed, history[len(history)-maxHistory:])
+	m.messages[chatID] = trimmed
+	m.invalidateMessageLines()
+}
+
+// buildMessageLines renders the whole message history for the selected chat.
+// It also returns the line offset of every message (for selection scrolling).
+func (m mainWindowModel) buildMessageLines(conv *api.Conversation, width int) ([]string, []int) {
+	messages := m.messages[conv.ChatID]
 	textWidth := maxInt(8, width-8)
 
 	var lines []string
-	for _, msg := range messages {
+	starts := make([]int, 0, len(messages))
+	for index, msg := range messages {
+		starts = append(starts, len(lines))
 		name := msg.Sender.Name
 		if name == "" {
 			name = "未知用户"
@@ -1449,8 +1856,14 @@ func (m mainWindowModel) messageLines() []string {
 		if msg.Edited {
 			header += " (已编辑)"
 		}
+		if index == m.selectedMsg {
+			header = "▌ " + header
+		}
 		if own {
 			header = fmt.Sprintf("我  %s", formatClock(msg.TimestampMs))
+			if msg.Pending {
+				header += " · 发送中…"
+			}
 			lines = append(lines, lipgloss.PlaceHorizontal(width, lipgloss.Right,
 				messageOwnNameSt.Render(header)))
 		} else {
@@ -1467,7 +1880,7 @@ func (m mainWindowModel) messageLines() []string {
 		}
 		lines = append(lines, "")
 	}
-	return lines
+	return lines, starts
 }
 
 // messageBodyLines renders the body of a message as plain wrapped lines.

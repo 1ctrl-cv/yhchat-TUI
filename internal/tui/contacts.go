@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -17,6 +18,7 @@ type contactsFocus int
 
 const (
 	contactsSidebar contactsFocus = iota
+	contactsSearch
 	contactsList
 )
 
@@ -24,6 +26,13 @@ const (
 type contactsLoadedMsg struct {
 	groups []api.ContactGroup
 	err    error
+}
+
+// requestHandledMsg reports the result of processing one request.
+type requestHandledMsg struct {
+	requestID int32
+	action    string
+	err       error
 }
 
 // friendRequestsLoadedMsg carries the pending friend/group requests.
@@ -72,10 +81,13 @@ type contactsModel struct {
 	selected int
 	offset   int
 
-	loading bool
-	errText string
-	okText  string
-	spinner spinner.Model
+	search textinput.Model
+
+	processing bool
+	loading    bool
+	errText    string
+	okText     string
+	spinner    spinner.Model
 }
 
 // newContactsModel creates the contacts page.
@@ -86,6 +98,7 @@ func newContactsModel(client *api.Client, token string) contactsModel {
 		focus:         contactsList,
 		sidebarCursor: sectionContacts,
 		expanded:      map[string]bool{},
+		search:        newTextInput("search contacts", false, 64),
 		spinner:       newSpinner(),
 	}
 }
@@ -142,6 +155,36 @@ func loadFriendRequestsCmd(client *api.Client, token string) tea.Cmd {
 	}
 }
 
+// agreeRequestCmd accepts or rejects one request.
+func agreeRequestCmd(client *api.Client, token string, requestID int32, agree int32, action string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return requestHandledMsg{requestID: requestID, action: action,
+			err: client.AgreeFriendRequest(ctx, token, requestID, agree)}
+	}
+}
+
+// ignoreRequestCmd ignores one request.
+func ignoreRequestCmd(client *api.Client, token string, requestID int32) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return requestHandledMsg{requestID: requestID, action: "忽略申请",
+			err: client.IgnoreFriendRequest(ctx, token, requestID)}
+	}
+}
+
+// deleteRequestCmd deletes one request entry.
+func deleteRequestCmd(client *api.Client, token string, requestID int32) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return requestHandledMsg{requestID: requestID, action: "删除申请",
+			err: client.DeleteFriendRequest(ctx, token, requestID)}
+	}
+}
+
 // Update handles messages for the contacts page.
 func (m contactsModel) Update(msg tea.Msg) (contactsModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -175,11 +218,31 @@ func (m contactsModel) Update(msg tea.Msg) (contactsModel, tea.Cmd) {
 		m.rebuildRows()
 		return m, nil
 
+	case requestHandledMsg:
+		m.processing = false
+		if msg.err != nil {
+			if api.IsSessionExpired(msg.err) {
+				return m, func() tea.Msg { return expiringTokenMsg{err: msg.err} }
+			}
+			m.errText = api.FriendlyMessage(msg.err)
+			return m, nil
+		}
+		m.okText = "已" + msg.action
+		m.errText = ""
+		return m.refresh()
+
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	default:
+		if m.focus == contactsSearch {
+			var cmd tea.Cmd
+			m.search, cmd = m.search.Update(msg)
+			return m, cmd
+		}
 	}
 	return m, nil
 }
@@ -219,8 +282,9 @@ func (m contactsModel) handleMouse(msg tea.MouseMsg) (contactsModel, tea.Cmd) {
 		return m, nil
 	}
 	if x < detailStart {
-		// Header row (0) + separator (1), one line per row afterwards.
+		// Search input (2 lines), then one line per row.
 		if y < 2 {
+			m.focus = contactsSearch
 			return m, nil
 		}
 		index := m.offset + (y - 2)
@@ -234,9 +298,33 @@ func (m contactsModel) handleMouse(msg tea.MouseMsg) (contactsModel, tea.Cmd) {
 		}
 		return m, nil
 	}
-	// "Enter chat" button pinned to the bottom of the detail pane.
 	row := m.selectedRow()
-	if row == nil || row.kind != contactRowContact {
+	if row == nil {
+		return m, nil
+	}
+	detailW := inner - detailStart
+	if row.kind == contactRowRequest && row.request != nil && y >= bodyH-1 && !m.processing {
+		agreeW := lipgloss.Width(dialogPrimaryStyle.Render("[a] 通过"))
+		ignoreW := lipgloss.Width(dialogCancelStyle.Render("[i] 忽略"))
+		deleteW := lipgloss.Width(dialogCancelStyle.Render("[d] 删除"))
+		total := agreeW + 1 + ignoreW + 1 + deleteW
+		pos := (detailW - total) / 2
+		rel := x - detailStart
+		m.processing = true
+		requestID := row.request.RequestID
+		switch {
+		case rel >= pos && rel < pos+agreeW:
+			return m, agreeRequestCmd(m.client, m.token, requestID, 1, "通过申请")
+		case rel >= pos+agreeW+1 && rel < pos+agreeW+1+ignoreW:
+			return m, ignoreRequestCmd(m.client, m.token, requestID)
+		case rel >= pos+agreeW+1+ignoreW+1 && rel < pos+total:
+			return m, deleteRequestCmd(m.client, m.token, requestID)
+		}
+		m.processing = false
+		return m, nil
+	}
+	// "Enter chat" button pinned to the bottom of the detail pane.
+	if row.kind != contactRowContact {
 		return m, nil
 	}
 	if y < bodyH-3 || y >= bodyH {
@@ -302,6 +390,27 @@ func (m contactsModel) handleKey(msg tea.KeyMsg) (contactsModel, tea.Cmd) {
 		return m, nil
 	}
 
+	// Search focus.
+	if m.focus == contactsSearch {
+		switch key {
+		case "esc":
+			m.search.SetValue("")
+			m.rebuildRows()
+			m.focus = contactsList
+			return m, nil
+		case "enter", "down":
+			m.focus = contactsList
+			return m, nil
+		case "up":
+			m.focus = contactsSidebar
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.search, cmd = m.search.Update(msg)
+		m.rebuildRows()
+		return m, cmd
+	}
+
 	// List focus.
 	switch key {
 	case "up":
@@ -348,6 +457,24 @@ func (m contactsModel) handleKey(msg tea.KeyMsg) (contactsModel, tea.Cmd) {
 			m.rebuildRows()
 		}
 		return m, nil
+	case "/":
+		m.focus = contactsSearch
+		return m, nil
+	case "a", "i", "d":
+		row := m.selectedRow()
+		if row == nil || row.kind != contactRowRequest || row.request == nil || m.processing {
+			return m, nil
+		}
+		m.processing = true
+		requestID := row.request.RequestID
+		switch key {
+		case "a":
+			return m, agreeRequestCmd(m.client, m.token, requestID, 1, "通过申请")
+		case "i":
+			return m, ignoreRequestCmd(m.client, m.token, requestID)
+		default:
+			return m, deleteRequestCmd(m.client, m.token, requestID)
+		}
 	case "r":
 		return m.refresh()
 	case "esc":
@@ -408,25 +535,42 @@ func (m *contactsModel) toggleRow() {
 // rebuildRows flattens groups/requests into the selectable row list.
 func (m *contactsModel) rebuildRows() {
 	rows := make([]contactRow, 0, 16)
+	query := strings.ToLower(strings.TrimSpace(m.search.Value()))
+	match := func(text string) bool {
+		return query == "" || strings.Contains(strings.ToLower(text), query)
+	}
 	if m.requests != nil && (m.requests.Total > 0 || m.requests.Pending > 0) {
-		rows = append(rows, contactRow{
-			kind:       contactRowHeader,
-			section:    "requests",
-			label:      "申请 / 邀请",
-			count:      int(m.requests.Pending),
-			expandable: true,
-			expanded:   m.expanded["requests"],
-		})
-		if m.expanded["requests"] {
-			for i := range m.requests.Requests {
-				request := m.requests.Requests[i]
-				rows = append(rows, contactRow{
-					kind:     contactRowRequest,
-					section:  "requests",
-					label:    inviteRequestLabel(request),
-					request:  &request,
-					chatType: api.ChatType(request.TargetType),
-				})
+		showRequests := query == ""
+		requestRows := make([]api.InviteRequest, 0, len(m.requests.Requests))
+		for i := range m.requests.Requests {
+			request := m.requests.Requests[i]
+			if query != "" && !match(inviteRequestLabel(request)) && !match(request.Note) {
+				continue
+			}
+			requestRows = append(requestRows, request)
+			showRequests = true
+		}
+		if showRequests {
+			expanded := m.expanded["requests"] || query != ""
+			rows = append(rows, contactRow{
+				kind:       contactRowHeader,
+				section:    "requests",
+				label:      "申请 / 邀请",
+				count:      int(m.requests.Pending),
+				expandable: true,
+				expanded:   expanded,
+			})
+			if expanded {
+				for i := range requestRows {
+					request := requestRows[i]
+					rows = append(rows, contactRow{
+						kind:     contactRowRequest,
+						section:  "requests",
+						label:    inviteRequestLabel(request),
+						request:  &request,
+						chatType: api.ChatType(request.TargetType),
+					})
+				}
 			}
 		}
 	}
@@ -435,18 +579,31 @@ func (m *contactsModel) rebuildRows() {
 		if name == "" {
 			name = group.ChatType.Label()
 		}
+		groupMatch := match(name)
+		matchedItems := make([]api.Contact, 0, len(group.Items))
+		for i := range group.Items {
+			item := group.Items[i]
+			if query != "" && !groupMatch && !match(item.DisplayName()) && !match(item.ID) {
+				continue
+			}
+			matchedItems = append(matchedItems, item)
+		}
+		if query != "" && len(matchedItems) == 0 && !groupMatch {
+			continue
+		}
+		expanded := m.expanded[name] || query != ""
 		rows = append(rows, contactRow{
 			kind:       contactRowHeader,
 			section:    name,
 			label:      name,
 			count:      len(group.Items),
 			expandable: true,
-			expanded:   m.expanded[name],
+			expanded:   expanded,
 			chatType:   group.ChatType,
 		})
-		if m.expanded[name] {
-			for i := range group.Items {
-				contact := group.Items[i]
+		if expanded {
+			for i := range matchedItems {
+				contact := matchedItems[i]
 				rows = append(rows, contactRow{
 					kind:     contactRowContact,
 					section:  name,
@@ -534,12 +691,13 @@ func (m contactsModel) View() string {
 // listColumn renders the section/contact list.
 func (m contactsModel) listColumn(bodyH, width int) []string {
 	lines := make([]string, 0, bodyH)
-	header := " 通讯录"
-	if m.requests != nil && m.requests.Pending > 0 {
-		header += fmt.Sprintf(" · %d 条待处理", m.requests.Pending)
+	search := m.search
+	search.Width = maxInt(4, width-5)
+	searchStyle := inputStyle
+	if m.focus == contactsSearch {
+		searchStyle = inputFocusedStyle
 	}
-	lines = append(lines, padLine(chatTitleStyle.Render(truncate(header, width)), width))
-	lines = append(lines, separator(width))
+	lines = append(lines, strings.Split(searchStyle.Width(width).Render(search.View()), "\n")...)
 
 	height := maxInt(1, bodyH-3)
 	offset := clamp(m.offset, 0, maxInt(0, len(m.rows)-1))
@@ -626,7 +784,14 @@ func (m contactsModel) statusLine(width int) string {
 	case len(m.groups) == 0 && m.requests == nil:
 		return hintStyle.Render("")
 	}
-	return hintStyle.Render(truncate(fmt.Sprintf("共 %d 行 · Enter 展开/收起", len(m.rows)), width))
+	info := fmt.Sprintf("共 %d 行", len(m.rows))
+	if m.requests != nil && m.requests.Pending > 0 {
+		info = fmt.Sprintf("%d 条待处理 · %s", m.requests.Pending, info)
+	}
+	if m.search.Value() != "" {
+		info = "搜索结果 · " + info
+	}
+	return hintStyle.Render(truncate(info+" · Enter 展开/收起", width))
 }
 
 // detailColumn renders the details of the selected row.
@@ -700,7 +865,11 @@ func (m contactsModel) detailColumn(bodyH, width int) []string {
 			status = "已处理"
 		}
 		lines = append(lines, m.detailRow(width, "状态", status))
-		lines = append(lines, "", hintStyle.Render(" 处理申请将在后续版本支持"))
+		buttonRow := lipgloss.JoinHorizontal(lipgloss.Top,
+			dialogPrimaryStyle.Render("[a] 通过"), " ",
+			dialogCancelStyle.Render("[i] 忽略"), " ",
+			dialogCancelStyle.Render("[d] 删除"))
+		button = lipgloss.PlaceHorizontal(width, lipgloss.Center, buttonRow)
 	}
 	if button == "" {
 		return padLines(lines, bodyH, width)
@@ -727,10 +896,16 @@ func (m contactsModel) viewHints() string {
 	if m.focus == contactsSidebar {
 		return sidebarHint()
 	}
-	if row := m.selectedRow(); row != nil && row.kind == contactRowContact {
-		return "↑↓ 选择 · Enter 进入聊天 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"
+	if m.focus == contactsSearch {
+		return "输入关键词筛选联系人和群 · Enter 回到列表 · Esc 清空 · Tab 切换焦点"
 	}
-	return "↑↓ 选择 · Enter 展开/收起 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"
+	if row := m.selectedRow(); row != nil && row.kind == contactRowContact {
+		return "↑↓ 选择 · Enter 进入聊天 · / 搜索 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"
+	}
+	if row := m.selectedRow(); row != nil && row.kind == contactRowRequest {
+		return "a 通过 · i 忽略 · d 删除 · / 搜索 · r 刷新 · Esc 返回侧边栏"
+	}
+	return "↑↓ 选择 · Enter 展开/收起 · / 搜索 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"
 }
 
 // padLines pads a list of lines to exactly height rows of the given width.

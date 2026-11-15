@@ -276,6 +276,9 @@ func (m loginModel) Update(msg tea.Msg) (loginModel, tea.Cmd) {
 		m.okText = ""
 		return m, nil
 
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
@@ -897,4 +900,64 @@ func validateEmail(email string) error {
 		return fmt.Errorf("请输入有效的邮箱地址")
 	}
 	return nil
+}
+
+// handleMouse implements click interactions on the login screen. It maps the
+// clicked row back to the rendered form (tabs, fields and submit button).
+func (m loginModel) handleMouse(msg tea.MouseMsg) (loginModel, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+	width, height := screenSize(m.width, m.height)
+	inner := width - 2*chromePadX
+	avail := maxInt(1, height-4)
+	flat := flattenLines(m.bodyLines(inner, avail))
+	top := (avail - len(flat)) / 2
+	if top < 0 {
+		top = 0
+	}
+	localY := msg.Y - 2 - top
+	localX := msg.X - chromePadX
+	if localY < 0 || localY >= len(flat) || localX < 0 || localX >= inner {
+		return m, nil
+	}
+	line := flat[localY]
+
+	// First body row is always the login-method tab bar.
+	if localY == 0 {
+		target := methodSMS
+		if localX < inner/2 {
+			target = methodEmail
+		}
+		if target == m.method {
+			return m, nil
+		}
+		m.focus = focusTabs
+		key := tea.KeyMsg{Type: tea.KeyRight}
+		if target == methodEmail {
+			key = tea.KeyMsg{Type: tea.KeyLeft}
+		}
+		return m.handleKey(key)
+	}
+
+	switch {
+	case strings.Contains(line, "图形验证码"):
+		m.focus = focusImageCode
+		return m, m.applyFocus()
+	case strings.Contains(line, "短信验证码"):
+		m.focus = focusSMSCode
+		return m, m.applyFocus()
+	case strings.Contains(line, "邮箱"):
+		m.focus = focusEmail
+		return m, m.applyFocus()
+	case strings.Contains(line, "密码"):
+		m.focus = focusPassword
+		return m, m.applyFocus()
+	case strings.Contains(line, "手机号"):
+		m.focus = focusPhone
+		return m, m.applyFocus()
+	case strings.Contains(line, m.submitLabel()):
+		return m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	return m, nil
 }

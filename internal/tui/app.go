@@ -44,6 +44,9 @@ type App struct {
 	// Realtime (WebSocket) connection, owned by the App and shared with chat.
 	ws        *api.WSClient
 	wsEnabled bool
+
+	// addingAccount is true while the login screen is adding another account.
+	addingAccount bool
 }
 
 // New creates the root model.
@@ -130,6 +133,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case openChatMsg:
 		return a, a.showChat()
+
+	case switchAccountMsg:
+		return a, a.handleSwitchAccount(msg.token)
+
+	case addAccountMsg:
+		a.addingAccount = true
+		a.login = newLoginModel(a.client, a.store.Data).resize(a.width, a.height)
+		a.login.notice = "登录要添加的账号"
+		var loginCmd tea.Cmd
+		a.screen = screenLogin
+		a.login, loginCmd = a.login.start()
+		return a, loginCmd
+
+	case deleteAccountMsg:
+		return a, a.handleDeleteAccount(msg.token)
 
 	case openContactChatMsg:
 		return a, a.openContactChat(msg)
@@ -240,6 +258,15 @@ func (a *App) route(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handleAutoLogin processes the startup token validation result.
 func (a *App) handleAutoLogin(msg autoLoginMsg) (tea.Model, tea.Cmd) {
 	if msg.err == nil && msg.user != nil {
+		if account, ok := a.store.ActiveAccount(); ok {
+			account.Name = msg.user.Data.Name
+			account.UserID = msg.user.Data.ID
+			if account.DeviceID == "" {
+				account.DeviceID = a.store.Data.DeviceID
+			}
+			a.store.UpsertAccount(account)
+			_ = a.store.Save()
+		}
 		a.prepareHome(msg.user, "已自动登录")
 		cmd := a.startChat(msg.user)
 		a.login = newLoginModel(a.client, a.store.Data)
@@ -270,6 +297,24 @@ func (a *App) handleLoginSuccess(msg loginSucceededMsg) (tea.Model, tea.Cmd) {
 	}
 	saveErr := a.store.Save()
 
+	account := config.Account{
+		Token:       msg.token,
+		DeviceID:    a.store.Data.DeviceID,
+		LoginMethod: msg.method,
+	}
+	if msg.method == "email" {
+		account.Email = msg.account
+	} else if msg.method == "sms" {
+		account.Mobile = maskPhone(msg.account)
+	}
+	if msg.user != nil && msg.user.Data != nil {
+		account.Name = msg.user.Data.Name
+		account.UserID = msg.user.Data.ID
+	}
+	a.store.UpsertAccount(account)
+	_ = a.store.Save()
+	a.addingAccount = false
+
 	a.prepareHome(msg.user, "登录成功，欢迎回来")
 	cmd := a.startChat(msg.user)
 	if saveErr != nil {
@@ -286,6 +331,7 @@ func (a *App) prepareHome(user *api.UserInfo, okText string) {
 		a.home = a.home.withUser(user)
 		a.home.okText = okText
 	}
+	a.home = a.home.withAccounts(a.store.AccountList())
 	a.contacts = newContactsModel(a.client, a.store.Data.Token).resize(a.width, a.height)
 	a.community = newCommunityModel(a.client, a.store.Data.Token).resize(a.width, a.height)
 }
@@ -416,8 +462,11 @@ func (a *App) openContactChat(msg openContactChatMsg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// handleLogoutDone clears the token and returns to the login screen.
+// handleLogoutDone forgets the current account and falls back to another saved
+// account when one exists.
 func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
+	current := a.store.Data.Token
+	a.store.RemoveAccount(current)
 	clearErr := a.store.ClearToken()
 	notice := "已退出登录"
 	switch {
@@ -430,11 +479,57 @@ func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
 	a.chat = mainWindowModel{}
 	a.contacts = newContactsModel(a.client, "")
 	a.community = newCommunityModel(a.client, "")
+	if accounts := a.store.AccountList(); len(accounts) > 0 {
+		a.store.SwitchAccount(accounts[0].Token)
+		_ = a.store.Save()
+		a.screen = screenSplash
+		return tea.Batch(a.spinner.Tick, autoLoginCmd(a.client, a.store.Data.Token))
+	}
 	return a.resetLogin(notice)
+}
+
+// handleSwitchAccount switches the active login and re-authenticates.
+func (a *App) handleSwitchAccount(token string) tea.Cmd {
+	if token == "" || token == a.store.Data.Token {
+		return nil
+	}
+	if !a.store.SwitchAccount(token) {
+		return nil
+	}
+	_ = a.store.Save()
+	a.stopWS()
+	a.chat = mainWindowModel{}
+	a.screen = screenSplash
+	return tea.Batch(a.spinner.Tick, autoLoginCmd(a.client, a.store.Data.Token))
+}
+
+// handleDeleteAccount forgets one account, switching to another one if needed.
+func (a *App) handleDeleteAccount(token string) tea.Cmd {
+	if token == "" {
+		return nil
+	}
+	current := a.store.Data.Token
+	a.store.RemoveAccount(token)
+	accounts := a.store.AccountList()
+	_ = a.store.Save()
+	a.home = a.home.withAccounts(accounts)
+	if token != current {
+		return nil
+	}
+	if len(accounts) > 0 {
+		return a.handleSwitchAccount(accounts[0].Token)
+	}
+	_ = a.store.ClearToken()
+	a.stopWS()
+	a.chat = mainWindowModel{}
+	a.contacts = newContactsModel(a.client, "")
+	a.community = newCommunityModel(a.client, "")
+	return a.resetLogin("已删除当前账号")
 }
 
 // handleExpired drops an expired token and returns to login.
 func (a *App) handleExpired() tea.Cmd {
+	a.store.RemoveAccount(a.store.Data.Token)
 	notice := "登录已过期，请重新登录"
 	if clearErr := a.store.ClearToken(); clearErr != nil {
 		notice += "（本地登录状态清除失败）"
@@ -443,6 +538,12 @@ func (a *App) handleExpired() tea.Cmd {
 	a.chat = mainWindowModel{}
 	a.contacts = newContactsModel(a.client, "")
 	a.community = newCommunityModel(a.client, "")
+	if accounts := a.store.AccountList(); len(accounts) > 0 {
+		a.store.SwitchAccount(accounts[0].Token)
+		_ = a.store.Save()
+		a.screen = screenSplash
+		return tea.Batch(a.spinner.Tick, autoLoginCmd(a.client, a.store.Data.Token))
+	}
 	return a.resetLogin(notice)
 }
 
