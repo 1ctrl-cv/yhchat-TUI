@@ -126,6 +126,10 @@ type Message struct {
 	Recalled    bool
 	QuoteMsgID  string
 	Edited      bool
+
+	// Local delivery state (never set from the server).
+	Pending bool
+	Failed  bool
 }
 
 // ContentTypeText is the content_type value for plain text messages.

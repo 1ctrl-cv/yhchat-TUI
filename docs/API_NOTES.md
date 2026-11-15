@@ -230,3 +230,39 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 ## 撤回消息
 
 - `POST /v1/msg/recall-msg`，请求 protobuf `RecallMsg{ msg_id=2 (repeated), chat_id=3, chat_type=4 }`，响应 `StatusResponse`。
+
+## 群资料 / 群成员 / 申请处理
+
+- **获取群资料** `POST /v1/group/info`：请求 protobuf `GroupInfoRequest{group_id=2}`；响应 `GroupInfoResponse{status=1,data=2}`，`GroupData` 字段：group_id=1,name=2,avatar_url=3,avatar_id=4,introduction=5,headcount=6,create_by=7,direct_join=8,permisson_level=9,history_msg=10,category_name=11,category_id=12,private=13,do_not_disturb=14,community_id=15,community_name=16,ban_id=17,ban_until_timestamp=18,top=19,admin=20（repeated）,gag_until_timestamp=21,limited_msg_type=22,owner=23,recommandation=24,is_gag=25,my_group_nickname=28,group_code=29,hide_group_members=30,ban_reason=34。
+- **获取群成员** `POST /v1/group/list-member`：请求 `ListMemberRequest{data{size=1,page=2},group_id=3,keywords=4}`；响应 `ListMemberResponse{status=1,user=2,total=3}`，User 含 group_id/user_info{user_id,name,avatar_url,is_vip}/permission_level/gag_timestamp/is_gag。
+- **处理添加申请** `POST /v1/friend/agree-apply` JSON `{"id":<requestId>,"agree":1|2|3|4}`（1 通过 / 2 拒绝 / 3 过期 / 4 已解散）。
+- **忽略申请** `POST /v1/friend/ignore-apply` JSON `{"id":..,"ignore":1}`。
+- **删除申请** `POST /v1/friend/delete-request` JSON `{"id":..}`。
+- **删除好友/退群/删机器人** `POST /v1/friend/delete-friend` JSON `{"chatId":..,"chatType":1|2|3}`。
+
+## 消息操作
+
+- **转发** `POST /v1/msg/msg-forward` JSON `{"msgId":..,"chatType":<原会话类型>,"receive":[{"chatId":..,"chatType":..}]}`。
+- **聊天记录搜索** `POST /v1/search/chat-search` JSON `{"word":..,"chatId":..,"chatType":..,"type":"all","size":30,"time":<上限时间戳>,"direction":1}`；响应 `data.list[]`（id/sequence/name/avatarUrl/content/type/time/timeText）。
+- **群聊首页搜索** `POST /v1/search/home-search` JSON `{"word":..}`，`data.list` 按标题分组（用户/好友/群/机器人）。当前 TUI 未使用。
+- **他人主页** `POST /v1/user/get-user` protobuf `GetUserRequest{id=2}` → `GetUserResponse{status=1,data=2}`（id/name/avatar_url/register_time/online_day/.../is_vip/ban 等）。
+- 发送通用消息：`SendMsgRequest` 支持 `content.mentioned_id=6`（repeated）与 `quote_msg_id=8`，实现引用回复与 @ 提醒。
+
+## 媒体上传（图片/文件/头像）
+
+1. `GET /v1/misc/configure-distribution` 取功能路由（imageUrl/fileUrl/audioUrl/videoUrl）。
+2. 上传凭证：图片 `GET /v1/misc/qiniu-token`、音频 `-audio`、文件 `qiniu-token2`、视频 `-video`。
+3. 七牛直传：凭证形如 `AK:...`；从策略无法解析 bucket 时回退 `https://upload.qiniup.com`；multipart 字段 `token`、`key`、`file`，key 使用 `md5(文件)+扩展名`。
+4. 发送：图片消息 `content_type=2` + `content.image_url`；文件消息 `content_type=4` + `content.file_name/file_url/file_size`。
+5. 头像：上传图片后调用 `POST /v1/user/edit-avatar`（`EditAvatarRequest{url=2}`）。
+6. 缓存：下载的图片/视频缓存到 `~/.yhchat-tui/cache/`（sha256(URL)+扩展名，原子写入，图片 30MB / 视频 200MB 上限）。
+
+## 草稿同步（WebSocket）
+
+- 发送：`{"seq":..,"cmd":"inputInfo","data":{"chatId":..,"input":..,"deviceId":..}}`（覆盖式）。
+- 接收：`info.cmd="draft_input"`，`Any.value` 为 protobuf `MsgInput{chat_id=1,input=2}`；客户端在输入时每 ~1 秒同步一次，切换会话时保存/恢复，收到远端草稿时在输入框为空时填入。
+
+## 日志
+
+- 目录 `~/.yhchat-tui/log/`，文件 `yhchat-tui.log`，超过 5MB 轮转为 `.1/.2/.3`。
+- 记录 HTTP 方法/路径/状态码/耗时（DEBUG 级需 `YHCHAT_DEBUG=1`）、WS 连接/断开/事件命令、启动/退出/错误；不记录 token、消息正文与文件内容。
