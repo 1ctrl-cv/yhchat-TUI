@@ -140,7 +140,12 @@ func Load(path string) (*Store, error) {
 	case errors.Is(err, os.ErrNotExist):
 		// first run
 	case err != nil:
-		return nil, fmt.Errorf("读取配置失败: %w", err)
+		// Permission errors (restricted/sandboxed terminals) must not prevent the
+		// TUI from starting: behave like a fresh login and warn about the
+		// persistence problem instead of aborting.
+		warn = fmt.Errorf("读取配置失败（本次以未登录状态启动，登录状态可能无法保存）: %w", err)
+		s.Data = Config{}
+		err = nil
 	default:
 		if len(raw) > 0 {
 			if jsErr := json.Unmarshal(raw, &s.Data); jsErr != nil {

@@ -63,46 +63,57 @@ func IsFallback() bool {
 // set, detailed HTTP/WS diagnostics are written as well.
 func Init(debug bool) error {
 	primary := filepath.Join(Dir(), logName)
-	path, fallbackUsed, err := openLog(primary)
-	if err != nil {
-		fallbackPath := filepath.Join(os.TempDir(), "yhchat-tui", logDirName, logName)
-		path, fallbackUsed, err = openLog(fallbackPath)
+	tempPath := filepath.Join(os.TempDir(), "yhchat-tui", logDirName, logName)
+	cwdPath := ""
+	if cwd, err := os.Getwd(); err == nil {
+		cwdPath = filepath.Join(cwd, "yhchat-tui.log")
+	}
+	candidates := []string{primary, tempPath}
+	if cwdPath != "" {
+		candidates = append(candidates, cwdPath)
+	}
+
+	var lastErr error
+	for i, candidate := range candidates {
+		path, err := openLog(candidate)
 		if err != nil {
-			return fmt.Errorf("无法创建日志文件（%s 与临时目录均不可写）: %w", primary, err)
+			lastErr = err
+			continue
 		}
-		initErrMsg = fmt.Sprintf("日志目录 %s 不可写，已改用临时目录日志", Dir())
+		mu.Lock()
+		logPath = path
+		fallback = i > 0
+		enabled = true
+		debugLog = debug || os.Getenv("YHCHAT_DEBUG") == "1"
+		mu.Unlock()
+		if i > 0 {
+			initErrMsg = fmt.Sprintf("日志目录 %s 不可写，已改用 %s", Dir(), path)
+		}
+		Info("日志初始化完成，文件: %s", path)
+		if initErrMsg != "" {
+			Info("%s", initErrMsg)
+		}
+		return nil
 	}
-
-	mu.Lock()
-	logPath = path
-	fallback = fallbackUsed
-	enabled = true
-	debugLog = debug || os.Getenv("YHCHAT_DEBUG") == "1"
-	mu.Unlock()
-
-	Info("日志初始化完成，文件: %s", path)
-	if initErrMsg != "" {
-		Info("%s", initErrMsg)
-	}
-	return nil
+	return fmt.Errorf("无法创建日志文件（主目录、临时目录、当前目录均不可写）: %w", lastErr)
 }
 
 // openLog creates the directory, rotates old logs and opens the file.
-func openLog(path string) (string, bool, error) {
+func openLog(path string) (string, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", false, err
+		return "", err
 	}
 	rotate(path)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	logFile = file
 	logger = log.New(file, "", log.LstdFlags|log.Lmicroseconds)
-	return path, strings.HasPrefix(dir, os.TempDir()), nil
+	return path, nil
 }
 
 // Close flushes and closes the log file.
