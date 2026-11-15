@@ -49,6 +49,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "日志提示: %v\n", initErr)
 	} else {
 		defer logging.Close()
+		if logging.IsFallback() {
+			fmt.Fprintf(os.Stderr, "日志提示: 主目录不可写，日志已改用临时文件 %s\n", logging.Path())
+		}
 		logging.Info("启动 yhchat-tui %s (commit %s, %s/%s, server=%s)",
 			tui.Version, tui.Commit, runtime.GOOS, runtime.GOARCH, serverOrDefault(*serverURL))
 	}

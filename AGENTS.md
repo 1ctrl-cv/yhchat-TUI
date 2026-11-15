@@ -47,7 +47,7 @@ main.go                      入口：flag 解析 + tea 程序启动
 internal/api/                HTTP 客户端：登录、会话/消息、通讯录、社区、个人资料、群资料/成员、媒体上传（protobuf + JSON）
                               + 手写 RFC6455 WebSocket 客户端（ws.go/ws_proto.go：实时消息、心跳、重连、草稿）
 internal/config/             token / 设备 ID / 多账号持久化（`~/.yhchat-tui/config.json`）
-internal/logging/            日志（`~/.yhchat-tui/log/`，5MB 轮转）
+internal/logging/            日志（`~/.yhchat-tui/log/`，5MB 轮转；主目录不可写时回退系统临时目录）
 internal/cache/              媒体缓存（`~/.yhchat-tui/cache/`）
 internal/tui/                所有界面：app 根模型、登录页、聊天（mainwindow + chat_overlays）、通讯录、
                              社区、我的（home）、共享侧边栏（shell）、样式、快照测试
@@ -101,6 +101,7 @@ vendor/                      依赖（提交进仓库，离线构建）
 - 上游 API 文档：`../yhchatAPI/src/api/v1/*.md`、`../yhchatAPI/src/full.proto`、`../yhchatAPI/src/api/wss/`
 - 本项目 API 实测记录：[`docs/API_NOTES.md`](docs/API_NOTES.md)
 - 登录里程碑独立验收报告：[`docs/VERIFICATION.md`](docs/VERIFICATION.md)
+
 
 
 

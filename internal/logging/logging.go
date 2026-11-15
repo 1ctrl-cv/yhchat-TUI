@@ -1,5 +1,9 @@
 // Package logging writes yhchat-tui logs to ~/.yhchat-tui/log/ with simple size
 // based rotation. Logs never contain tokens, message bodies or other secrets.
+//
+// When the primary directory is not writable (for example a sandboxed terminal
+// that can only write the workspace), logging falls back to the system temp
+// directory so the application still starts and can be diagnosed.
 package logging
 
 import (
@@ -21,14 +25,17 @@ const (
 )
 
 var (
-	mu       sync.Mutex
-	logger   *log.Logger
-	logFile  *os.File
-	enabled  bool
-	debugLog bool
+	mu         sync.Mutex
+	logger     *log.Logger
+	logFile    *os.File
+	enabled    bool
+	debugLog   bool
+	logPath    string
+	fallback   bool
+	initErrMsg string
 )
 
-// Dir returns the log directory (~/.yhchat-tui/log).
+// Dir returns the primary log directory (~/.yhchat-tui/log).
 func Dir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -37,30 +44,65 @@ func Dir() string {
 	return filepath.Join(home, dirName, logDirName)
 }
 
-// Init opens the log file. When debug is true, debug-level HTTP/WS details are
-// also written (set YHCHAT_DEBUG=1 to enable).
+// Path returns the log file path in use (empty when logging is disabled).
+func Path() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return logPath
+}
+
+// IsFallback reports whether logging is using the temporary fallback directory.
+func IsFallback() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return fallback
+}
+
+// Init opens the log file. When the primary directory cannot be written it
+// falls back to <temp>/yhchat-tui/log. When debug is true, or YHCHAT_DEBUG=1 is
+// set, detailed HTTP/WS diagnostics are written as well.
 func Init(debug bool) error {
-	dir := Dir()
-	if dir == "" {
-		return fmt.Errorf("无法定位用户主目录")
+	primary := filepath.Join(Dir(), logName)
+	path, fallbackUsed, err := openLog(primary)
+	if err != nil {
+		fallbackPath := filepath.Join(os.TempDir(), "yhchat-tui", logDirName, logName)
+		path, fallbackUsed, err = openLog(fallbackPath)
+		if err != nil {
+			return fmt.Errorf("无法创建日志文件（%s 与临时目录均不可写）: %w", primary, err)
+		}
+		initErrMsg = fmt.Sprintf("日志目录 %s 不可写，已改用临时目录日志", Dir())
 	}
+
+	mu.Lock()
+	logPath = path
+	fallback = fallbackUsed
+	enabled = true
+	debugLog = debug || os.Getenv("YHCHAT_DEBUG") == "1"
+	mu.Unlock()
+
+	Info("日志初始化完成，文件: %s", path)
+	if initErrMsg != "" {
+		Info("%s", initErrMsg)
+	}
+	return nil
+}
+
+// openLog creates the directory, rotates old logs and opens the file.
+func openLog(path string) (string, bool, error) {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("创建日志目录失败: %w", err)
+		return "", false, err
 	}
-	path := filepath.Join(dir, logName)
 	rotate(path)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return fmt.Errorf("打开日志文件失败: %w", err)
+		return "", false, err
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	logFile = file
 	logger = log.New(file, "", log.LstdFlags|log.Lmicroseconds)
-	enabled = true
-	debugLog = debug || os.Getenv("YHCHAT_DEBUG") == "1"
-	Info("日志初始化完成，文件: %s", path)
-	return nil
+	return path, strings.HasPrefix(dir, os.TempDir()), nil
 }
 
 // Close flushes and closes the log file.
@@ -108,9 +150,10 @@ func Debug(format string, args ...any) {
 	mu.Lock()
 	debug := debugLog
 	mu.Unlock()
-	if debug {
-		write("DEBUG", format, args...)
+	if !debug {
+		return
 	}
+	write("DEBUG", format, args...)
 }
 
 // Error logs an error.
