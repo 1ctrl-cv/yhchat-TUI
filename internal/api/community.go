@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -146,6 +147,8 @@ type Comment struct {
 	CreateTimeText string  `json:"createTimeText"`
 	IsLiked        string  `json:"isLiked"`
 	IsVip          int32   `json:"isVip"`
+	// Replies holds nested replies (楼中楼) returned inline by comment-list.
+	Replies []Comment `json:"replies"`
 }
 
 // UnmarshalJSON decodes a Comment with the same isLiked tolerance as Post: the
@@ -240,6 +243,50 @@ func (c *Client) Posts(ctx context.Context, token string, baID int64, page, size
 	return data.Posts, data.Total, nil
 }
 
+// LikePost toggles the like state of one community article. The server
+// endpoint is a toggle: calling it again un-likes the article.
+//
+// Endpoint: POST /v1/community/posts/post-like (JSON body {"id": postID}).
+func (c *Client) LikePost(ctx context.Context, token string, postID int64) error {
+	if postID <= 0 {
+		return fmt.Errorf("文章 ID 无效")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/posts/post-like", token, communityIDRequest{ID: postID})
+	return err
+}
+
+// CollectPost toggles the collected state of one community article.
+//
+// Endpoint: POST /v1/community/posts/post-collect (JSON body {"id": postID}).
+func (c *Client) CollectPost(ctx context.Context, token string, postID int64) error {
+	if postID <= 0 {
+		return fmt.Errorf("文章 ID 无效")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/posts/post-collect", token, communityIDRequest{ID: postID})
+	return err
+}
+
+// CreateComment posts a comment or a nested reply (楼中楼) on an article.
+// commentID is 0 for a top-level comment; for a reply it is the ID of the
+// comment being replied to.
+//
+// Endpoint: POST /v1/community/comment/comment (JSON).
+func (c *Client) CreateComment(ctx context.Context, token string, postID, commentID int64, content string) error {
+	if postID <= 0 {
+		return fmt.Errorf("文章 ID 无效")
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return fmt.Errorf("评论内容不能为空")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/comment/comment", token, commentCreateRequest{
+		PostID:    postID,
+		CommentID: commentID,
+		Content:   content,
+	})
+	return err
+}
+
 // PostDetail fetches one article with its section and moderation flag.
 //
 // Endpoint: POST /v1/community/posts/post-detail (JSON).
@@ -311,6 +358,13 @@ type commentListRequest struct {
 	PostID int64 `json:"postId"`
 	Size   int   `json:"size"`
 	Page   int   `json:"page"`
+}
+
+// commentCreateRequest is the body of POST /v1/community/comment/comment.
+type commentCreateRequest struct {
+	PostID    int64  `json:"postId"`
+	CommentID int64  `json:"commentId"`
+	Content   string `json:"content"`
 }
 
 // normalizeCommunityPage clamps paging arguments to what the community

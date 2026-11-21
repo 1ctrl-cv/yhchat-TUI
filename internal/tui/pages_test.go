@@ -440,3 +440,82 @@ func TestProfileUserDataEdit(t *testing.T) {
 		}
 	}
 }
+
+// TestCommunityArticleReactionsAndComments covers like/collect toggles and
+// publishing both top-level comments and 楼中楼 replies.
+func TestCommunityArticleReactionsAndComments(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	switchToSection(t, app, sectionCommunity)
+
+	sendKey(t, app, tea.KeyEnter)
+	cmd := sendKey(t, app, tea.KeyEnter)
+	app.Update(waitFor[postDetailMsg](t, cmd))
+	if app.community.view != communityArticleView {
+		t.Fatalf("view = %v, want article", app.community.view)
+	}
+	runeKey := func(text string) tea.Cmd {
+		t.Helper()
+		model, keyCmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)})
+		updated, ok := model.(*App)
+		if !ok {
+			t.Fatalf("unexpected model %T", model)
+		}
+		*app = *updated
+		return keyCmd
+	}
+
+	// Like then unlike.
+	app.Update(waitFor[postLikeDoneMsg](t, runeKey("l")))
+	app.Update(waitFor[postLikeDoneMsg](t, runeKey("l")))
+	ts.mu.Lock()
+	likes := append([]int64(nil), ts.postLikes...)
+	ts.mu.Unlock()
+	if len(likes) != 2 || likes[0] != 31622 || likes[1] != 31622 {
+		t.Fatalf("post likes = %v", likes)
+	}
+	if post := app.community.currentPost(); post == nil || post.IsLiked == "1" {
+		t.Fatalf("post should be unliked after second toggle: %+v", post)
+	}
+
+	// Collect then uncollect.
+	app.Update(waitFor[postCollectDoneMsg](t, runeKey("s")))
+	app.Update(waitFor[postCollectDoneMsg](t, runeKey("s")))
+	ts.mu.Lock()
+	collects := append([]int64(nil), ts.postCollects...)
+	ts.mu.Unlock()
+	if len(collects) != 2 || collects[0] != 31622 {
+		t.Fatalf("post collects = %v", collects)
+	}
+
+	// Reply to the second comment (id 2) via 楼中楼.
+	runeKey("j") // move selection from the first comment to the second
+	app.Update(runeKey("r"))
+	if !app.community.commentMode || app.community.commentParentID != 2 {
+		t.Fatalf("reply mode=%v parent=%d, want mode=true parent=2",
+			app.community.commentMode, app.community.commentParentID)
+	}
+	runeKey("楼中楼回复")
+	app.Update(waitFor[commentPostedMsg](t, sendKey(t, app, tea.KeyEnter)))
+	if app.community.commentMode {
+		t.Fatal("reply mode should close after publishing")
+	}
+	ts.mu.Lock()
+	posted := append([]testPostedComment(nil), ts.postedComments...)
+	ts.mu.Unlock()
+	if len(posted) != 1 || posted[0].CommentID != 2 || posted[0].Content != "楼中楼回复" {
+		t.Fatalf("posted reply = %+v", posted)
+	}
+
+	// Top-level comment (ParentID 0).
+	app.Update(runeKey("c"))
+	runeKey("顶层评论")
+	app.Update(waitFor[commentPostedMsg](t, sendKey(t, app, tea.KeyEnter)))
+	ts.mu.Lock()
+	posted = append([]testPostedComment(nil), ts.postedComments...)
+	ts.mu.Unlock()
+	if len(posted) != 2 || posted[1].CommentID != 0 || posted[1].Content != "顶层评论" {
+		t.Fatalf("posted comments = %+v", posted)
+	}
+}

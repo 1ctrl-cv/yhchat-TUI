@@ -282,3 +282,11 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 - **申请/邀请列表**：`/v1/friend/request-list` 的 `result`（字段 13）0=待处理、1=已通过、2=已拒绝、3=过期、4=已解散；`pending`（字段 4）只统计待处理。实测账号 111 条记录中仅 2 条待处理，其余已处理，界面现在会标注状态并禁止重复操作。
 
 
+
+## 社区互动（点赞 / 收藏 / 评论 / 楼中楼）
+
+- **点赞/取消点赞**：`POST /v1/community/posts/post-like`，JSON `{"id":<文章ID>}`；接口是**切换**语义（同一请求再次调用即取消点赞），客户端按当前 `isLiked` 状态做乐观更新，失败时回滚。
+- **收藏/取消收藏**：`POST /v1/community/posts/post-collect`，JSON `{"id":<文章ID>}`，同样为切换语义，对应 `isCollected`。
+- **发表评论 / 回复**：`POST /v1/community/comment/comment`，JSON `{"postId":..,"commentId":..,"content":".."}`；顶层评论 `commentId=0`，楼中楼回复填被回复评论的 `id`。
+- **评论列表**：评论顶层对象里带 `replies` 数组（楼中楼，实测只内嵌部分回复，例如 `repliesNum=9` 只返回 2 条；完整回复可能需要后续接口/分页）。`Comment` 结构已递归解码 `replies`。
+- 客户端界面：文章页 `j/k` 选择评论、`l` 点赞、`s` 收藏、`c` 发顶层评论、`r` 回复选中评论（楼中楼），`Enter` 发送、`Esc` 取消。

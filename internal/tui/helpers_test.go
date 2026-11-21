@@ -69,6 +69,16 @@ type testServer struct {
 	dismissed          []string // conversation ids marked as read
 	recalled           []testRecallRecord
 	userData           map[string]any // saved personal-profile fields
+	postLikes          []int64
+	postCollects       []int64
+	postedComments     []testPostedComment
+}
+
+// testPostedComment records one comment created through the mock API.
+type testPostedComment struct {
+	PostID    int64
+	CommentID int64
+	Content   string
 }
 
 // testRecallRecord records one recall request.
@@ -385,6 +395,43 @@ func newTestServer(t *testing.T) *testServer {
 		})
 	})
 
+	mux.HandleFunc("/v1/community/posts/post-like", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.postLikes = append(ts.postLikes, payload.ID)
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/community/posts/post-collect", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.postCollects = append(ts.postCollects, payload.ID)
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/community/comment/comment", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			PostID    int64  `json:"postId"`
+			CommentID int64  `json:"commentId"`
+			Content   string `json:"content"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.postedComments = append(ts.postedComments, testPostedComment{
+			PostID: payload.PostID, CommentID: payload.CommentID, Content: payload.Content,
+		})
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
 	mux.HandleFunc("/v1/community/comment/comment-list", func(w http.ResponseWriter, r *http.Request) {
 		writeTestJSON(w, map[string]any{
 			"code": 1, "msg": "success",
@@ -399,6 +446,14 @@ func newTestServer(t *testing.T) *testServer {
 						"id": 2, "postId": 31622, "senderId": "1002", "content": "支持一下",
 						"createTime": 1757756000, "createTimeText": "2025-09-13 17:33:20",
 						"senderNickname": "小红", "senderAvatar": "", "likeNum": 0, "isLiked": "0",
+						"replies": []any{
+							map[string]any{
+								"id": 3, "postId": 31622, "parentId": 2, "senderId": "1003",
+								"content": "楼中楼回复", "createTime": 1757756060,
+								"createTimeText": "2025-09-13 17:34:20",
+								"senderNickname": "小刚", "senderAvatar": "", "likeNum": 0, "isLiked": "0",
+							},
+						},
 					},
 				},
 				"isAdmin": 0,

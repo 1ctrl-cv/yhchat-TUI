@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -71,10 +73,37 @@ type postsLoadedMsg struct {
 }
 
 type postDetailMsg struct {
+	postID        int64
+	detail        *api.PostDetail
+	comments      []api.Comment
+	commentsTotal int
+	err           error
+}
+
+// commentsLoadedMsg reloads only the comment section after posting.
+type commentsLoadedMsg struct {
 	postID   int64
-	detail   *api.PostDetail
 	comments []api.Comment
+	total    int
 	err      error
+}
+
+// commentPostedMsg reports the result of creating a comment/reply.
+type commentPostedMsg struct {
+	err error
+}
+
+// postLikeDoneMsg / postCollectDoneMsg report article reaction toggles.
+type postLikeDoneMsg struct {
+	postID int64
+	liked  bool
+	err    error
+}
+
+type postCollectDoneMsg struct {
+	postID    int64
+	collected bool
+	err       error
 }
 
 // communityModel is the "社区" page.
@@ -104,6 +133,13 @@ type communityModel struct {
 	postDetail      *api.PostDetail
 	postComments    []api.Comment
 	articleOffset   int
+	commentsTotal   int
+	commentIndex    int
+	commentInput    textinput.Model
+	commentMode     bool
+	commentParentID int64
+	commentTarget   string
+	commentPosting  bool
 
 	loading bool
 	errText string
@@ -118,6 +154,7 @@ func newCommunityModel(client *api.Client, token string) communityModel {
 		token:         token,
 		focus:         communityList,
 		sidebarCursor: sectionCommunity,
+		commentInput:  newTextInput("comment...", false, 500),
 		spinner:       newSpinner(),
 	}
 }
@@ -190,11 +227,48 @@ func loadPostDetailCmd(client *api.Client, token string, postID int64) tea.Cmd {
 		if err != nil {
 			return postDetailMsg{postID: postID, err: err}
 		}
-		comments, _, commentErr := client.Comments(ctx, token, postID, 1, 20)
+		comments, total, commentErr := client.Comments(ctx, token, postID, 1, 20)
 		if commentErr != nil {
 			comments = nil
 		}
-		return postDetailMsg{postID: postID, detail: detail, comments: comments}
+		return postDetailMsg{postID: postID, detail: detail, comments: comments, commentsTotal: total}
+	}
+}
+
+// loadCommentsCmd refreshes the comment section without reloading the article.
+func loadCommentsCmd(client *api.Client, token string, postID int64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		comments, total, err := client.Comments(ctx, token, postID, 1, 20)
+		return commentsLoadedMsg{postID: postID, comments: comments, total: total, err: err}
+	}
+}
+
+// createCommentCmd posts a top-level comment or a nested reply.
+func createCommentCmd(client *api.Client, token string, postID, parentID int64, content string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return commentPostedMsg{err: client.CreateComment(ctx, token, postID, parentID, content)}
+	}
+}
+
+// toggleLikeCmd toggles the article like state.
+func toggleLikeCmd(client *api.Client, token string, postID int64, liked bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return postLikeDoneMsg{postID: postID, liked: liked, err: client.LikePost(ctx, token, postID)}
+	}
+}
+
+// toggleCollectCmd toggles the article collect state.
+func toggleCollectCmd(client *api.Client, token string, postID int64, collected bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return postCollectDoneMsg{postID: postID, collected: collected, err: client.CollectPost(ctx, token, postID)}
 	}
 }
 
@@ -282,9 +356,102 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 		}
 		m.postDetail = msg.detail
 		m.postComments = msg.comments
+		m.commentsTotal = msg.commentsTotal
+		if m.commentsTotal < len(m.postComments) {
+			m.commentsTotal = len(m.postComments)
+		}
+		m.commentIndex = 0
+		m.commentMode = false
+		m.commentPosting = false
+		m.commentInput.Blur()
 		m.articleOffset = 0
 		m.view = communityArticleView
 		m.focus = communityArticle
+		m.errText = ""
+		return m, nil
+
+	case commentsLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			return m.handleLoadError(msg.err, "加载评论失败")
+		}
+		m.postComments = msg.comments
+		m.commentsTotal = msg.total
+		if m.commentsTotal < len(m.postComments) {
+			m.commentsTotal = len(m.postComments)
+		}
+		if m.commentIndex >= len(flattenComments(m.postComments)) {
+			m.commentIndex = 0
+		}
+		return m, nil
+
+	case commentPostedMsg:
+		m.loading = false
+		m.commentPosting = false
+		if msg.err != nil {
+			return m.handleLoadError(msg.err, "发表评论失败")
+		}
+		m.commentMode = false
+		m.commentInput.SetValue("")
+		m.commentInput.Blur()
+		m.commentParentID = 0
+		m.commentTarget = ""
+		m.okText = "评论已发布"
+		m.errText = ""
+		if m.postDetail != nil {
+			m.postDetail.Post.CommentNum++
+			return m, tea.Batch(m.spinner.Tick, loadCommentsCmd(m.client, m.token, m.postDetail.Post.ID))
+		}
+		return m, nil
+
+	case postLikeDoneMsg:
+		m.loading = false
+		post := m.currentPost()
+		if msg.err != nil {
+			// Roll back the optimistic update and resync error text.
+			if post != nil && post.ID == msg.postID {
+				if msg.liked {
+					post.IsLiked = "0"
+					if post.LikeNum > 0 {
+						post.LikeNum--
+					}
+				} else {
+					post.IsLiked = "1"
+					post.LikeNum++
+				}
+			}
+			return m.handleLoadError(msg.err, "点赞失败")
+		}
+		if msg.liked {
+			m.okText = "已点赞"
+		} else {
+			m.okText = "已取消点赞"
+		}
+		m.errText = ""
+		return m, nil
+
+	case postCollectDoneMsg:
+		m.loading = false
+		post := m.currentPost()
+		if msg.err != nil {
+			if post != nil && post.ID == msg.postID {
+				if msg.collected {
+					post.IsCollected = 0
+					if post.CollectNum > 0 {
+						post.CollectNum--
+					}
+				} else {
+					post.IsCollected = 1
+					post.CollectNum++
+				}
+			}
+			return m.handleLoadError(msg.err, "收藏失败")
+		}
+		if msg.collected {
+			m.okText = "已收藏"
+		} else {
+			m.okText = "已取消收藏"
+		}
 		m.errText = ""
 		return m, nil
 
@@ -293,8 +460,37 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	default:
+		if m.view == communityArticleView && m.commentMode {
+			var cmd tea.Cmd
+			m.commentInput, cmd = m.commentInput.Update(msg)
+			return m, cmd
+		}
 	}
 	return m, nil
+}
+
+// currentPost returns the article shown in the article view.
+func (m communityModel) currentPost() *api.Post {
+	if m.postDetail == nil {
+		return nil
+	}
+	return &m.postDetail.Post
+}
+
+// flattenComments returns the rendered comments/replies in display order.
+func flattenComments(comments []api.Comment) []api.Comment {
+	var out []api.Comment
+	var walk func(items []api.Comment)
+	walk = func(items []api.Comment) {
+		for _, comment := range items {
+			out = append(out, comment)
+			walk(comment.Replies)
+		}
+	}
+	walk(comments)
+	return out
 }
 
 // handleMouse handles click and wheel events on the community page.
@@ -401,6 +597,27 @@ func (m communityModel) handleLoadError(err error, prefix string) (communityMode
 // handleKey processes key presses.
 func (m communityModel) handleKey(msg tea.KeyMsg) (communityModel, tea.Cmd) {
 	key := msg.String()
+
+	// While composing a comment, the input owns all keys except Esc/Enter.
+	if m.view == communityArticleView && m.commentMode {
+		switch key {
+		case "esc":
+			m.commentMode = false
+			m.commentPosting = false
+			m.commentParentID = 0
+			m.commentTarget = ""
+			m.commentInput.Blur()
+			return m, nil
+		case "enter":
+			if !m.commentPosting {
+				return m.submitComment()
+			}
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.commentInput, cmd = m.commentInput.Update(msg)
+		return m, cmd
+	}
 
 	if key == "tab" {
 		m.focus = m.nextFocus()
@@ -559,7 +776,118 @@ func (m communityModel) handlePostsKey(key string) (communityModel, tea.Cmd) {
 	return m, nil
 }
 
-// handleArticleKey scrolls the article view.
+// beginComment opens the comment input for a top-level comment or a reply.
+func (m communityModel) beginComment(parentID int64, target string) (communityModel, tea.Cmd) {
+	if m.postDetail == nil {
+		return m, nil
+	}
+	if len([]rune(strings.TrimSpace(m.commentInput.Value()))) > 500 {
+		m.errText = "评论内容过长"
+		return m, nil
+	}
+	m.commentMode = true
+	m.commentPosting = false
+	m.commentParentID = parentID
+	m.commentTarget = target
+	m.commentInput.SetValue("")
+	m.errText = ""
+	m.focus = communityArticle
+	return m, m.commentInput.Focus()
+}
+
+// submitComment posts the current comment input.
+func (m communityModel) submitComment() (communityModel, tea.Cmd) {
+	if m.postDetail == nil {
+		return m, nil
+	}
+	text := strings.TrimSpace(m.commentInput.Value())
+	if text == "" {
+		m.errText = "评论内容不能为空"
+		return m, nil
+	}
+	m.commentPosting = true
+	m.loading = true
+	m.errText = ""
+	return m, tea.Batch(m.spinner.Tick,
+		createCommentCmd(m.client, m.token, m.postDetail.Post.ID, m.commentParentID, text))
+}
+
+// toggleArticleLike applies the like toggle optimistically.
+func (m communityModel) toggleArticleLike() (communityModel, tea.Cmd) {
+	post := m.currentPost()
+	if post == nil {
+		return m, nil
+	}
+	liked := post.IsLiked == "1"
+	if liked {
+		post.IsLiked = "0"
+		if post.LikeNum > 0 {
+			post.LikeNum--
+		}
+	} else {
+		post.IsLiked = "1"
+		post.LikeNum++
+	}
+	m.loading = true
+	m.errText = ""
+	return m, tea.Batch(m.spinner.Tick, toggleLikeCmd(m.client, m.token, post.ID, !liked))
+}
+
+// toggleArticleCollect applies the collect toggle optimistically.
+func (m communityModel) toggleArticleCollect() (communityModel, tea.Cmd) {
+	post := m.currentPost()
+	if post == nil {
+		return m, nil
+	}
+	collected := post.IsCollected != 0
+	if collected {
+		post.IsCollected = 0
+		if post.CollectNum > 0 {
+			post.CollectNum--
+		}
+	} else {
+		post.IsCollected = 1
+		post.CollectNum++
+	}
+	m.loading = true
+	m.errText = ""
+	return m, tea.Batch(m.spinner.Tick, toggleCollectCmd(m.client, m.token, post.ID, !collected))
+}
+
+// moveCommentSelection moves the highlighted comment and scrolls to it.
+func (m *communityModel) moveCommentSelection(delta int) {
+	count := len(flattenComments(m.postComments))
+	if count == 0 {
+		return
+	}
+	m.commentIndex = clamp(m.commentIndex+delta, 0, count-1)
+	m.ensureCommentVisible()
+}
+
+// ensureCommentVisible scrolls the article so the selected comment is visible.
+func (m *communityModel) ensureCommentVisible() {
+	lines, starts := m.buildArticleLines()
+	if m.commentIndex < 0 || m.commentIndex >= len(starts) {
+		return
+	}
+	start := starts[m.commentIndex]
+	end := len(lines)
+	if m.commentIndex+1 < len(starts) {
+		end = starts[m.commentIndex+1]
+	}
+	height := m.articleViewportHeight()
+	maxOffset := maxInt(0, len(lines)-height)
+	offset := clamp(m.articleOffset, 0, maxOffset)
+	if start < offset {
+		offset = start
+	}
+	if end > offset+height {
+		offset = end - height
+	}
+	m.articleOffset = clamp(offset, 0, maxOffset)
+}
+
+// handleArticleKey handles the article view (scrolling, reactions, comments).
 func (m communityModel) handleArticleKey(key string) (communityModel, tea.Cmd) {
 	switch key {
 	case "up":
@@ -579,6 +907,29 @@ func (m communityModel) handleArticleKey(key string) (communityModel, tea.Cmd) {
 	case "end", "G":
 		m.articleOffset = 1 << 20
 		m.clampArticleOffset()
+	case "j":
+		m.moveCommentSelection(1)
+	case "k":
+		m.moveCommentSelection(-1)
+	case "l":
+		return m.toggleArticleLike()
+	case "s":
+		return m.toggleArticleCollect()
+	case "c":
+		return m.beginComment(0, "")
+	case "r":
+		comments := flattenComments(m.postComments)
+		if len(comments) == 0 {
+			m.errText = "当前文章还没有可回复的评论"
+			return m, nil
+		}
+		index := clamp(m.commentIndex, 0, len(comments)-1)
+		target := comments[index]
+		name := target.SenderNickname
+		if name == "" {
+			name = "评论 #" + strconv.FormatInt(target.ID, 10)
+		}
+		return m.beginComment(target.ID, name)
 	case "esc", "left":
 		m.view = communityListView
 		m.focus = communityPosts
@@ -729,7 +1080,25 @@ func (m communityModel) postsViewportHeight() int {
 
 // articleViewportHeight returns the number of visible article lines.
 func (m communityModel) articleViewportHeight() int {
-	return maxInt(3, m.bodyHeight()-1)
+	height := m.bodyHeight() - 1 // status line
+	if m.commentMode {
+		height-- // comment input line
+	}
+	return maxInt(3, height)
+}
+
+// commentInputLine renders the comment composer at the bottom of the article.
+func (m communityModel) commentInputLine(width int) string {
+	if m.commentPosting {
+		return hintStyle.Render(truncate(" 发送评论中…", width))
+	}
+	prompt := "评论: "
+	if m.commentParentID != 0 {
+		prompt = "回复 " + truncate(m.commentTarget, 12) + ": "
+	}
+	input := m.commentInput
+	input.Width = maxInt(8, width-lipgloss.Width(prompt)-2)
+	return hintStyle.Render(prompt) + input.View()
 }
 
 // View implements tea.Model for the community page.
@@ -939,13 +1308,22 @@ func (m communityModel) articleColumn(bodyH, width int) []string {
 }
 
 // articleLines renders the whole scrollable article (content + comments).
+// articleLines renders the scrollable article (content + comments).
 func (m communityModel) articleLines() []string {
+	lines, _ := m.buildArticleLines()
+	return lines
+}
+
+// buildArticleLines renders the article and returns the line offset of every
+// rendered comment (used for comment selection/scrolling).
+func (m communityModel) buildArticleLines() ([]string, []int) {
 	if m.postDetail == nil {
-		return []string{hintStyle.Render(" 正在加载文章…")}
+		return []string{hintStyle.Render(" 正在加载文章…")}, nil
 	}
 	post := m.postDetail.Post
 	width := m.articleWidth()
 	var lines []string
+	var commentStarts []int
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorCyan)
 	for _, line := range wrapText(post.Title, width) {
 		lines = append(lines, titleStyle.Render(line))
@@ -957,24 +1335,43 @@ func (m communityModel) articleLines() []string {
 	lines = append(lines, renderMarkdown(post.Content, width-2)...)
 	lines = append(lines, "")
 
-	// Comments.
-	if len(m.postComments) > 0 {
-		lines = append(lines, separator(width))
-		lines = append(lines, titleAccentStyle.Render("评论"))
-		for i, comment := range m.postComments {
-			if i >= 10 {
-				break
+	// Comments (top-level) and 楼中楼 replies.
+	lines = append(lines, separator(width))
+	lines = append(lines, titleAccentStyle.Render(fmt.Sprintf("评论（%d）", m.commentsTotal)))
+	if len(m.postComments) == 0 {
+		lines = append(lines, hintStyle.Render("  暂无评论，按 c 发表第一条评论"))
+	} else {
+		var walk func(items []api.Comment, depth int)
+		walk = func(items []api.Comment, depth int) {
+			for _, comment := range items {
+				index := len(commentStarts)
+				commentStarts = append(commentStarts, len(lines))
+				indentDepth := depth
+				if indentDepth > 3 {
+					indentDepth = 3
+				}
+				indent := strings.Repeat("  ", indentDepth)
+				marker := "  "
+				if index == m.commentIndex {
+					marker = lipgloss.NewStyle().Foreground(colorAccent).Render("▌ ")
+				}
+				name := comment.SenderNickname
+				if name == "" {
+					name = "用户 " + comment.SenderID
+				}
+				header := fmt.Sprintf("%s%s · %s", indent, name, comment.CreateTimeText)
+				lines = append(lines, marker+hintStyle.Render(truncate(header, maxInt(4, width-4))))
+				for _, line := range wrapText(comment.Content, maxInt(8, width-6-indentDepth*2)) {
+					lines = append(lines, "    "+indent+line)
+				}
+				lines = append(lines, "")
+				walk(comment.Replies, depth+1)
 			}
-			header := fmt.Sprintf("%s · %s", comment.SenderNickname, comment.CreateTimeText)
-			lines = append(lines, hintStyle.Render("  "+truncate(header, maxInt(4, width-4))))
-			for _, line := range wrapText(comment.Content, maxInt(8, width-6)) {
-				lines = append(lines, "    "+line)
-			}
-			lines = append(lines, "")
 		}
+		walk(m.postComments, 0)
 	}
 	lines = append(lines, hintStyle.Render("按 Esc 返回分区"))
-	return lines
+	return lines, commentStarts
 }
 
 // articleInfoColumn renders the community/author info sidebar of the article view.
@@ -990,6 +1387,15 @@ func (m communityModel) articleInfoColumn(bodyH, width int) []string {
 		lines = append(lines, m.infoRow(width, "点赞", fmt.Sprintf("%d", post.LikeNum)))
 		lines = append(lines, m.infoRow(width, "评论", fmt.Sprintf("%d", post.CommentNum)))
 		lines = append(lines, m.infoRow(width, "收藏", fmt.Sprintf("%d", post.CollectNum)))
+		likeState := "未点赞"
+		if post.IsLiked == "1" {
+			likeState = "已点赞"
+		}
+		collectState := "未收藏"
+		if post.IsCollected != 0 {
+			collectState = "已收藏"
+		}
+		lines = append(lines, m.infoRow(width, "状态", likeState+" · "+collectState))
 		if m.selectedBa != nil {
 			lines = append(lines, "")
 			lines = append(lines, titleAccentStyle.Render("分区信息"), "")
@@ -1027,7 +1433,10 @@ func (m communityModel) viewHints() string {
 		return sidebarHint()
 	}
 	if m.view == communityArticleView {
-		return "↑↓ 滚动 · PgUp/PgDn 翻页 · End 最新 · Esc 返回分区"
+		if m.commentMode {
+			return "Enter 发送评论 · Esc 取消 · j/k 选择评论 · c 评论 · r 回复"
+		}
+		return "↑↓ 滚动 · j/k 选择评论 · l 点赞 · s 收藏 · c 评论 · r 回复 · Esc 返回分区"
 	}
 	switch m.focus {
 	case communityTabs:

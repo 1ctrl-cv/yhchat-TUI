@@ -181,7 +181,19 @@ const commentListJSON = `{
         "senderAvatar": "https://chat-img.example.com/commenter.png",
         "createTimeText": "2025-08-09 21:43:02",
         "isLiked": "0",
-        "isVip": 1
+        "isVip": 1,
+        "replies": [
+          {
+            "id": 125,
+            "postId": 31153,
+            "parentId": 123,
+            "senderId": "114516",
+            "content": "楼中楼回复",
+            "createTime": 1754746995,
+            "isLiked": 0,
+            "isVip": 0
+          }
+        ]
       },
       {
         "id": 124,
@@ -264,6 +276,7 @@ func communityEndpointCalls(client *Client) map[string]func() error {
 			_, err := client.PostDetail(ctx, badToken, 31622)
 			return err
 		},
+
 		"Comments": func() error {
 			_, _, err := client.Comments(ctx, badToken, 31153, 1, 10)
 			return err
@@ -513,6 +526,90 @@ func TestComments(t *testing.T) {
 	if numericLiked.IsLiked != "1" {
 		t.Fatalf("numeric reply isLiked = %q, want %q", numericLiked.IsLiked, "1")
 	}
+	if len(comment.Replies) != 1 || comment.Replies[0].ID != 125 || comment.Replies[0].ParentID != 123 {
+		t.Fatalf("nested replies = %+v", comment.Replies)
+	}
+}
+
+func TestPostLikeCollectAndCreateComment(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assertCommunityRequest(t, r, r.URL.Path, communityTestToken) {
+			writeJSONResp(w, 200, `{"code":-1,"msg":"bad request"}`)
+			return
+		}
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/community/posts/post-like", "/v1/community/posts/post-collect":
+			var req communityIDRequest
+			if decodeCommunityRequestBody(t, r, &req) && req.ID != 31622 {
+				t.Errorf("%s id = %d, want 31622", r.URL.Path, req.ID)
+			}
+		case "/v1/community/comment/comment":
+			var req commentCreateRequest
+			if decodeCommunityRequestBody(t, r, &req) {
+				if req.PostID != 31622 || req.Content == "" {
+					t.Errorf("comment request = %+v", req)
+				}
+				switch req.CommentID {
+				case 0:
+					if req.Content != "顶层评论" {
+						t.Errorf("top-level content = %q", req.Content)
+					}
+				case 123:
+					if req.Content != "楼中楼" {
+						t.Errorf("reply content = %q", req.Content)
+					}
+				default:
+					t.Errorf("commentID = %d", req.CommentID)
+				}
+			}
+		}
+		writeJSONResp(w, 200, `{"code":1,"msg":"success"}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t)
+	client.BaseURL = srv.URL
+	ctx := context.Background()
+	if err := client.LikePost(ctx, communityTestToken, 31622); err != nil {
+		t.Fatalf("LikePost: %v", err)
+	}
+	if err := client.CollectPost(ctx, communityTestToken, 31622); err != nil {
+		t.Fatalf("CollectPost: %v", err)
+	}
+	if err := client.CreateComment(ctx, communityTestToken, 31622, 0, "  顶层评论  "); err != nil {
+		t.Fatalf("CreateComment top: %v", err)
+	}
+	if err := client.CreateComment(ctx, communityTestToken, 31622, 123, "楼中楼"); err != nil {
+		t.Fatalf("CreateComment reply: %v", err)
+	}
+	if len(paths) != 4 {
+		t.Fatalf("requests = %v", paths)
+	}
+	if err := client.CreateComment(ctx, communityTestToken, 31622, 0, "   "); err == nil {
+		t.Fatal("empty comment should be rejected")
+	}
+	if err := client.LikePost(ctx, communityTestToken, 0); err == nil {
+		t.Fatal("invalid post id should be rejected")
+	}
+}
+
+// communityActionCalls builds one call per write endpoint (like/collect/comment).
+func communityActionCalls(client *Client) map[string]func() error {
+	ctx := context.Background()
+	const badToken = "bad-token"
+	return map[string]func() error{
+		"LikePost": func() error {
+			return client.LikePost(ctx, badToken, 31622)
+		},
+		"CollectPost": func() error {
+			return client.CollectPost(ctx, badToken, 31622)
+		},
+		"CreateComment": func() error {
+			return client.CreateComment(ctx, badToken, 31622, 0, "hi")
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +623,11 @@ func TestCommunityNotLoggedIn(t *testing.T) {
 
 	client := newTestClient(t)
 	client.BaseURL = srv.URL
-	for name, call := range communityEndpointCalls(client) {
+	calls := communityEndpointCalls(client)
+	for name, call := range communityActionCalls(client) {
+		calls[name] = call
+	}
+	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
 			err := call()
 			if err == nil {
