@@ -303,7 +303,7 @@ func (m contactsModel) handleMouse(msg tea.MouseMsg) (contactsModel, tea.Cmd) {
 		return m, nil
 	}
 	detailW := inner - detailStart
-	if row.kind == contactRowRequest && row.request != nil && y >= bodyH-1 && !m.processing {
+	if row.kind == contactRowRequest && row.request != nil && y >= bodyH-1 && !m.processing && row.request.Result == 0 {
 		agreeW := lipgloss.Width(dialogPrimaryStyle.Render("[a] 通过"))
 		ignoreW := lipgloss.Width(dialogCancelStyle.Render("[i] 忽略"))
 		deleteW := lipgloss.Width(dialogCancelStyle.Render("[d] 删除"))
@@ -465,6 +465,10 @@ func (m contactsModel) handleKey(msg tea.KeyMsg) (contactsModel, tea.Cmd) {
 		if row == nil || row.kind != contactRowRequest || row.request == nil || m.processing {
 			return m, nil
 		}
+		if row.request.Result != 0 {
+			m.errText = "该申请已处理（" + requestResultLabel(row.request.Result) + "），不能重复操作"
+			return m, nil
+		}
 		m.processing = true
 		requestID := row.request.RequestID
 		switch key {
@@ -566,7 +570,7 @@ func (m *contactsModel) rebuildRows() {
 					rows = append(rows, contactRow{
 						kind:     contactRowRequest,
 						section:  "requests",
-						label:    inviteRequestLabel(request),
+						label:    inviteRequestLabel(request) + "（" + requestResultLabel(request.Result) + "）",
 						request:  &request,
 						chatType: api.ChatType(request.TargetType),
 					})
@@ -632,6 +636,24 @@ func inviteRequestLabel(request api.InviteRequest) string {
 		}
 	}
 	return fmt.Sprintf("请求 #%d", request.RequestID)
+}
+
+// requestResultLabel renders the processing state of one request.
+func requestResultLabel(result int32) string {
+	switch result {
+	case 0:
+		return "待处理"
+	case 1:
+		return "已通过"
+	case 2:
+		return "已拒绝"
+	case 3:
+		return "已过期"
+	case 4:
+		return "已解散"
+	default:
+		return "已处理"
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -859,17 +881,17 @@ func (m contactsModel) detailColumn(bodyH, width int) []string {
 		if request.InviteAtStr != "" {
 			lines = append(lines, m.detailRow(width, "时间", request.InviteAtStr))
 		}
-		status := "待处理"
-		switch request.Result {
-		case 1:
-			status = "已处理"
+		lines = append(lines, m.detailRow(width, "状态", requestResultLabel(request.Result)))
+		if request.Result == 0 {
+			buttonRow := lipgloss.JoinHorizontal(lipgloss.Top,
+				dialogPrimaryStyle.Render("[a] 通过"), " ",
+				dialogCancelStyle.Render("[i] 忽略"), " ",
+				dialogCancelStyle.Render("[d] 删除"))
+			button = lipgloss.PlaceHorizontal(width, lipgloss.Center, buttonRow)
+		} else {
+			button = lipgloss.PlaceHorizontal(width, lipgloss.Center,
+				hintStyle.Render("该申请已处理，不能重复操作"))
 		}
-		lines = append(lines, m.detailRow(width, "状态", status))
-		buttonRow := lipgloss.JoinHorizontal(lipgloss.Top,
-			dialogPrimaryStyle.Render("[a] 通过"), " ",
-			dialogCancelStyle.Render("[i] 忽略"), " ",
-			dialogCancelStyle.Render("[d] 删除"))
-		button = lipgloss.PlaceHorizontal(width, lipgloss.Center, buttonRow)
 	}
 	if button == "" {
 		return padLines(lines, bodyH, width)
@@ -903,6 +925,9 @@ func (m contactsModel) viewHints() string {
 		return "↑↓ 选择 · Enter 进入聊天 · / 搜索 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"
 	}
 	if row := m.selectedRow(); row != nil && row.kind == contactRowRequest {
+		if row.request != nil && row.request.Result != 0 {
+			return "该申请已处理 · ↑↓ 选择 · / 搜索 · r 刷新 · Esc 返回侧边栏"
+		}
 		return "a 通过 · i 忽略 · d 删除 · / 搜索 · r 刷新 · Esc 返回侧边栏"
 	}
 	return "↑↓ 选择 · Enter 展开/收起 · / 搜索 · r 刷新 · Esc 返回侧边栏 · Tab 切换焦点"

@@ -10,6 +10,7 @@ import (
 const (
 	convListStatusField = 1
 	convListDataField   = 2
+	convListTotalField  = 3
 	convListMD5Field    = 4
 
 	convChatIDField    = 1
@@ -186,63 +187,75 @@ func decodeStatusResponse(b []byte) (Status, error) {
 }
 
 // decodeConversationListResponse decodes ConversationListResponse and returns
-// the status, conversations and list md5.
-func decodeConversationListResponse(b []byte) (Status, []Conversation, string, error) {
+// the status, conversations, list md5 and the total conversation count reported
+// by the server (the server caps the returned list at 200 entries).
+func decodeConversationListResponse(b []byte) (Status, []Conversation, string, int, error) {
 	var (
 		status Status
 		convs  []Conversation
 		md5    string
+		total  int
 	)
 	for len(b) > 0 {
 		num, typ, next, err := consumeTag(b)
 		if err != nil {
-			return status, nil, "", err
+			return status, nil, "", 0, err
 		}
 		b = next
 		switch num {
 		case convListStatusField:
 			value, rest, ok, err := consumeBytesField(num, typ, b)
 			if err != nil {
-				return status, nil, "", fmt.Errorf("status: %w", err)
+				return status, nil, "", 0, fmt.Errorf("status: %w", err)
 			}
 			b = rest
 			if ok {
 				decoded, decodeErr := decodeStatus(value)
 				if decodeErr != nil {
-					return status, nil, "", fmt.Errorf("status: %w", decodeErr)
+					return status, nil, "", 0, fmt.Errorf("status: %w", decodeErr)
 				}
 				status = decoded
 			}
 		case convListDataField:
 			value, rest, ok, err := consumeBytesField(num, typ, b)
 			if err != nil {
-				return status, nil, "", fmt.Errorf("data: %w", err)
+				return status, nil, "", 0, fmt.Errorf("data: %w", err)
 			}
 			b = rest
 			if ok {
 				conv, decodeErr := decodeConversation(value)
 				if decodeErr != nil {
-					return status, nil, "", fmt.Errorf("data: %w", decodeErr)
+					return status, nil, "", 0, fmt.Errorf("data: %w", decodeErr)
 				}
 				convs = append(convs, conv)
+			}
+		case convListTotalField:
+			value, rest, ok, err := consumeVarintField(num, typ, b)
+			if err != nil {
+				return status, nil, "", 0, fmt.Errorf("total: %w", err)
+			}
+			b = rest
+			if ok {
+				total = int(int32(value))
 			}
 		case convListMD5Field:
 			value, rest, ok, err := consumeBytesField(num, typ, b)
 			if err != nil {
-				return status, nil, "", fmt.Errorf("md5: %w", err)
+				return status, nil, "", 0, fmt.Errorf("md5: %w", err)
 			}
 			b = rest
 			if ok {
 				md5 = string(value)
 			}
 		default:
-			b, err = skipField(num, typ, b)
-			if err != nil {
-				return status, nil, "", err
+			var skipErr error
+			b, skipErr = skipField(num, typ, b)
+			if skipErr != nil {
+				return status, nil, "", 0, skipErr
 			}
 		}
 	}
-	return status, convs, md5, nil
+	return status, convs, md5, total, nil
 }
 
 // decodeConversation decodes ConversationListResponse.Data.

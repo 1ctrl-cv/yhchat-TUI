@@ -169,6 +169,8 @@ func (m Message) Preview() string {
 			return text
 		}
 		return "[HTML 消息]"
+	case 10, 12:
+		return "[视频]"
 	case 11:
 		return "[语音]"
 	case 13:

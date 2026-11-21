@@ -50,11 +50,12 @@ type mainWindowModel struct {
 
 	width, height int
 
-	conversations []api.Conversation
-	filtered      []api.Conversation
-	selected      int
-	convOffset    int
-	sidebarCursor section
+	conversations      []api.Conversation
+	conversationsTotal int
+	filtered           []api.Conversation
+	selected           int
+	convOffset         int
+	sidebarCursor      section
 
 	search textinput.Model
 	input  textinput.Model
@@ -161,8 +162,8 @@ func loadConversationsCmd(client *api.Client, token string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		conversations, err := client.Conversations(ctx, token)
-		return conversationsLoadedMsg{conversations: conversations, err: err}
+		conversations, total, err := client.ConversationsWithTotal(ctx, token)
+		return conversationsLoadedMsg{conversations: conversations, total: total, err: err}
 	}
 }
 
@@ -263,6 +264,7 @@ func (m mainWindowModel) Update(msg tea.Msg) (mainWindowModel, tea.Cmd) {
 			return m, m.handleErr(msg.err, "加载会话列表失败")
 		}
 		m.conversations = msg.conversations
+		m.conversationsTotal = msg.total
 		m.applyFilter()
 		m.errText = ""
 		if cmd := m.ensureMessagesCmd(); cmd != nil {
@@ -1689,7 +1691,11 @@ func (m mainWindowModel) conversationStatus(width int) string {
 	case m.okText != "":
 		return okStyle.Render(truncate(m.okText, width))
 	case len(m.conversations) > 0:
-		return hintStyle.Render(truncate(fmt.Sprintf("共 %d 个会话", len(m.conversations)), width))
+		label := fmt.Sprintf("共 %d 个会话", len(m.conversations))
+		if m.conversationsTotal > len(m.conversations) {
+			label = fmt.Sprintf("已加载 %d / 共 %d 个会话", len(m.conversations), m.conversationsTotal)
+		}
+		return hintStyle.Render(truncate(label, width))
 	}
 	return ""
 }
@@ -1945,8 +1951,15 @@ func (m mainWindowModel) messageBodyLines(msg api.Message, width int) []string {
 			meta += fmt.Sprintf(" %d 秒", msg.Content.AudioTime)
 		}
 		lines = append(lines, meta)
-	case 12:
-		lines = append(lines, "[视频]")
+	case 10, 12: // 视频（真实服务端用 10 携带 video_url，proto 枚举里没有 10）
+		meta := "[视频]"
+		if msg.Content.VideoTime > 0 {
+			meta += fmt.Sprintf(" %d 秒", msg.Content.VideoTime)
+		}
+		if msg.Content.VideoURL != "" {
+			meta += " " + truncate(msg.Content.VideoURL, maxInt(8, width/2))
+		}
+		lines = append(lines, meta)
 	case 13:
 		meta := "[语音通话]"
 		if msg.Content.CallStatus != "" {

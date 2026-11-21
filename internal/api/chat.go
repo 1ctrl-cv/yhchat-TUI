@@ -15,19 +15,27 @@ import (
 //
 // Endpoint: POST /v1/conversation/list (protobuf request/response).
 func (c *Client) Conversations(ctx context.Context, token string) ([]Conversation, error) {
+	conversations, _, err := c.ConversationsWithTotal(ctx, token)
+	return conversations, err
+}
+
+// ConversationsWithTotal is Conversations plus the server-reported total. The
+// server currently caps the returned list at 200 conversations, so callers can
+// detect that older conversations are not included.
+func (c *Client) ConversationsWithTotal(ctx context.Context, token string) ([]Conversation, int, error) {
 	body := encodeConversationListRequest("")
 	raw, err := c.postProto(ctx, "/v1/conversation/list", token, body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	status, conversations, _, err := decodeConversationListResponse(raw)
+	status, conversations, _, total, err := decodeConversationListResponse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("解析会话列表失败: %w", err)
+		return nil, 0, fmt.Errorf("解析会话列表失败: %w", err)
 	}
 	if status.Code != 1 {
-		return nil, &APIError{Code: int(status.Code), Msg: status.Msg}
+		return nil, 0, &APIError{Code: int(status.Code), Msg: status.Msg}
 	}
-	return conversations, nil
+	return conversations, total, nil
 }
 
 // Messages fetches historical messages of a conversation, oldest first.

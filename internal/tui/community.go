@@ -50,6 +50,7 @@ var communityTabList = []communityTab{
 
 type communitiesLoadedMsg struct {
 	tab         int
+	page        int
 	communities []api.Community
 	total       int
 	err         error
@@ -63,6 +64,7 @@ type communityInfoMsg struct {
 
 type postsLoadedMsg struct {
 	baID  int64
+	page  int
 	posts []api.Post
 	total int
 	err   error
@@ -87,19 +89,21 @@ type communityModel struct {
 	sidebarCursor section
 	view          communityViewMode
 
-	tab           int
-	communities   []api.Community
-	communityTot  int
-	listIndex     int
-	listOffset    int
-	selectedBa    *api.Community
-	posts         []api.Post
-	postsTotal    int
-	postIndex     int
-	postOffset    int
-	postDetail    *api.PostDetail
-	postComments  []api.Comment
-	articleOffset int
+	tab             int
+	communities     []api.Community
+	communityTot    int
+	communitiesPage int
+	listIndex       int
+	listOffset      int
+	selectedBa      *api.Community
+	posts           []api.Post
+	postsTotal      int
+	postsPage       int
+	postIndex       int
+	postOffset      int
+	postDetail      *api.PostDetail
+	postComments    []api.Comment
+	articleOffset   int
 
 	loading bool
 	errText string
@@ -135,7 +139,7 @@ func (m communityModel) init() (communityModel, tea.Cmd) {
 	m.loading = true
 	m.errText = ""
 	m.okText = ""
-	return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab))
+	return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab, 1))
 }
 
 // refresh reloads the current tab.
@@ -143,17 +147,17 @@ func (m communityModel) refresh() (communityModel, tea.Cmd) {
 	m.loading = true
 	m.errText = ""
 	m.okText = ""
-	return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab))
+	return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab, 1))
 }
 
 // loadCommunitiesCmd fetches one page of communities for a tab.
-func loadCommunitiesCmd(client *api.Client, token string, tab int) tea.Cmd {
+func loadCommunitiesCmd(client *api.Client, token string, tab, page int) tea.Cmd {
 	typ := communityTabList[clamp(tab, 0, len(communityTabList)-1)].Typ
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		communities, total, err := client.Communities(ctx, token, typ, 1, 30)
-		return communitiesLoadedMsg{tab: tab, communities: communities, total: total, err: err}
+		communities, total, err := client.Communities(ctx, token, typ, page, 30)
+		return communitiesLoadedMsg{tab: tab, page: page, communities: communities, total: total, err: err}
 	}
 }
 
@@ -168,12 +172,12 @@ func loadCommunityInfoCmd(client *api.Client, token string, id int64) tea.Cmd {
 }
 
 // loadPostsCmd fetches the article list of one community.
-func loadPostsCmd(client *api.Client, token string, baID int64) tea.Cmd {
+func loadPostsCmd(client *api.Client, token string, baID int64, page int) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
-		posts, total, err := client.Posts(ctx, token, baID, 1, 30)
-		return postsLoadedMsg{baID: baID, posts: posts, total: total, err: err}
+		posts, total, err := client.Posts(ctx, token, baID, page, 30)
+		return postsLoadedMsg{baID: baID, page: page, posts: posts, total: total, err: err}
 	}
 }
 
@@ -210,17 +214,31 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 		if msg.err != nil {
 			return m.handleLoadError(msg.err, "加载社区列表失败")
 		}
-		m.tab = msg.tab
-		m.communities = msg.communities
 		m.communityTot = msg.total
-		m.listIndex = 0
-		m.listOffset = 0
-		m.posts = nil
-		m.selectedBa = nil
-		m.errText = ""
-		if cmd := m.ensureCommunityCmd(); cmd != nil {
-			return m, cmd
+		if msg.page <= 1 {
+			m.tab = msg.tab
+			m.communities = msg.communities
+			m.communitiesPage = 1
+			m.listIndex = 0
+			m.listOffset = 0
+			m.posts = nil
+			m.selectedBa = nil
+			m.errText = ""
+			if cmd := m.ensureCommunityCmd(); cmd != nil {
+				return m, cmd
+			}
+			return m, nil
 		}
+		seen := make(map[int64]bool, len(m.communities))
+		for _, item := range m.communities {
+			seen[item.ID] = true
+		}
+		for _, item := range msg.communities {
+			if !seen[item.ID] {
+				m.communities = append(m.communities, item)
+			}
+		}
+		m.communitiesPage = msg.page
 		return m, nil
 
 	case communityInfoMsg:
@@ -236,11 +254,25 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 		if msg.err != nil {
 			return m.handleLoadError(msg.err, "加载文章列表失败")
 		}
-		m.posts = msg.posts
 		m.postsTotal = msg.total
-		m.postIndex = 0
-		m.postOffset = 0
-		m.errText = ""
+		if msg.page <= 1 {
+			m.posts = msg.posts
+			m.postsPage = 1
+			m.postIndex = 0
+			m.postOffset = 0
+			m.errText = ""
+			return m, nil
+		}
+		seen := make(map[int64]bool, len(m.posts))
+		for _, post := range m.posts {
+			seen[post.ID] = true
+		}
+		for _, post := range msg.posts {
+			if !seen[post.ID] {
+				m.posts = append(m.posts, post)
+			}
+		}
+		m.postsPage = msg.page
 		return m, nil
 
 	case postDetailMsg:
@@ -327,7 +359,7 @@ func (m communityModel) handleMouse(msg tea.MouseMsg) (communityModel, tea.Cmd) 
 				m.tab = index
 				m.loading = true
 				m.focus = communityTabs
-				return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab))
+				return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab, 1))
 			}
 			return m, nil
 		}
@@ -426,14 +458,14 @@ func (m communityModel) handleTabsKey(key string) (communityModel, tea.Cmd) {
 		if m.tab > 0 {
 			m.tab--
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab))
+			return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab, 1))
 		}
 		return m, nil
 	case "right", "down":
 		if m.tab < len(communityTabList)-1 {
 			m.tab++
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab))
+			return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab, 1))
 		}
 		return m, nil
 	case "enter":
@@ -461,6 +493,11 @@ func (m communityModel) handleListKey(key string) (communityModel, tea.Cmd) {
 		if m.listIndex < len(m.communities)-1 {
 			m.listIndex++
 			m.ensureListVisible()
+			return m, m.ensureCommunityCmd()
+		}
+		if len(m.communities) < m.communityTot && !m.loading {
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, loadCommunitiesCmd(m.client, m.token, m.tab, m.communitiesPage+1))
 		}
 		return m, m.ensureCommunityCmd()
 	case "enter":
@@ -496,6 +533,11 @@ func (m communityModel) handlePostsKey(key string) (communityModel, tea.Cmd) {
 		if m.postIndex < len(m.posts)-1 {
 			m.postIndex++
 			m.ensurePostsVisible()
+			return m, nil
+		}
+		if m.selectedBa != nil && len(m.posts) < m.postsTotal && !m.loading {
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID, m.postsPage+1))
 		}
 		return m, nil
 	case "enter":
@@ -512,7 +554,7 @@ func (m communityModel) handlePostsKey(key string) (communityModel, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = true
-		return m, tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID))
+		return m, tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID, 1))
 	}
 	return m, nil
 }
@@ -611,7 +653,7 @@ func (m *communityModel) ensureCommunityCmd() tea.Cmd {
 	m.loading = true
 	return tea.Batch(m.spinner.Tick,
 		loadCommunityInfoCmd(m.client, m.token, community.ID),
-		loadPostsCmd(m.client, m.token, community.ID))
+		loadPostsCmd(m.client, m.token, community.ID, 1))
 }
 
 // ensurePostsCmd loads the article list when missing.
@@ -620,7 +662,7 @@ func (m *communityModel) ensurePostsCmd() tea.Cmd {
 		return nil
 	}
 	m.loading = true
-	return tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID))
+	return tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID, 1))
 }
 
 // ensureListVisible keeps the selected community visible.

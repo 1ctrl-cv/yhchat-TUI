@@ -55,6 +55,7 @@ type expiringTokenMsg struct{ err error }
 // conversationsLoadedMsg carries a refreshed conversation list.
 type conversationsLoadedMsg struct {
 	conversations []api.Conversation
+	total         int // server-reported total (may exceed the capped list)
 	err           error
 }
 

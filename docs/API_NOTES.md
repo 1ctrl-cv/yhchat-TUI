@@ -270,3 +270,13 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 ## 社区文章列表的 amountNum（2026-11 实测）
 
 真实 `POST /v1/community/posts/post-list` 响应里 `amountNum`（打赏金额）是**小数**（如 `22.01`、`0.1`），不能按整数解析；否则整个文章列表 JSON 解码失败，页面显示「解析文章列表失败」。`Post.AmountNum` 与 `Comment.AmountNum` 均按 `float64` 解码。其余计数字段实测仍为整数。
+
+## 2026-11 真实接口探测补充
+
+- **会话列表上限**：`POST /v1/conversation/list` 实际只返回最近 **200** 个会话，但响应里的 `total`（字段 3）是真实总数（实测 200 / 251）。请求体只有 `md5`（字段 2），额外尝试 size/page 字段会被忽略，无法翻页。客户端现在用 `ConversationsWithTotal` 读取总数，界面显示「已加载 200 / 共 251 个会话」。
+- **群成员总数**：`POST /v1/group/list-member` 实测 `total`（字段 3）恒为 0，但 `page` 翻页有效；界面改用群资料的 `headcount` 兜底显示与翻页。
+- **视频消息**：真实消息的 `content_type=10`（full.proto 枚举里没有 10）通过 `MsgContent.video_url=19` / `video_time=20` 携带视频，界面按视频渲染；`content_type=12` 同样按视频兜底。
+- **消息历史分页**：`list-message` 的 `msg_id` 是**包含该消息**、向更早方向返回；客户端页首取最旧消息 ID 继续向上翻页并去重（按最新消息 ID 请求会得到与当前页大量重叠的结果）。
+- **文章列表 `amountNum`**：见上一节，可能为小数。
+- **社区分页**：`/v1/community/posts/post-list` 与 `/v1/community/ba/following-ba-list` 的 `page`/`size` 有效（实测热门分区 817 篇文章分页正常）；界面在列表底部继续下翻时自动加载下一页。
+- **申请/邀请列表**：`/v1/friend/request-list` 的 `result`（字段 13）0=待处理、1=已通过、2=已拒绝、3=过期、4=已解散；`pending`（字段 4）只统计待处理。实测账号 111 条记录中仅 2 条待处理，其余已处理，界面现在会标注状态并禁止重复操作。

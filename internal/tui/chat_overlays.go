@@ -217,9 +217,16 @@ func (m mainWindowModel) handleOverlayMessage(msg tea.Msg) (mainWindowModel, tea
 		}
 		if msg.info != nil {
 			m.groupInfo = msg.info
+			// The real list-member response reports total=0; fall back to the
+			// group headcount from group info so paging/counts still work.
+			if msg.total <= 0 && m.groupTotal <= 0 && msg.info.Headcount > 0 {
+				m.groupTotal = int(msg.info.Headcount)
+			}
+		}
+		if msg.total > 0 {
+			m.groupTotal = msg.total
 		}
 		m.groupMembers = msg.members
-		m.groupTotal = msg.total
 		m.groupPage = msg.page
 		m.overlayIndex = 0
 		return m, m.applyOverlayInputFocus()
@@ -362,7 +369,9 @@ func (m mainWindowModel) handleOverlayKey(msg tea.KeyMsg) (mainWindowModel, tea.
 			}
 			return m, nil
 		case "pgdown":
-			if m.groupPage*50 < m.groupTotal {
+			hasMore := m.groupPage*50 < m.groupTotal ||
+				(m.groupTotal <= 0 && len(m.groupMembers) == 50)
+			if hasMore {
 				m.overlayLoading = true
 				return m, loadGroupPageCommand(m.client, m.token, m.groupInfo.GroupID, m.groupPage+1)
 			}

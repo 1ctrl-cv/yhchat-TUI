@@ -210,6 +210,13 @@ func TestConversations(t *testing.T) {
 	if len(conversations) != 2 {
 		t.Fatalf("conversations = %d, want 2", len(conversations))
 	}
+	_, total, err := client.ConversationsWithTotal(context.Background(), "tok-1")
+	if err != nil {
+		t.Fatalf("ConversationsWithTotal: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("conversation total = %d, want 2", total)
+	}
 	userConv := conversations[0]
 	if userConv.ChatID != "1001" || userConv.ChatType != ChatTypeUser || userConv.Remark != "小明" ||
 		userConv.Name != "小明真名" || userConv.Unread != 3 || !userConv.At || userConv.SendTimestamp != 1710000000 {
@@ -478,7 +485,9 @@ func TestMessagePreview(t *testing.T) {
 		{Message{ContentType: 2}, "[图片]"},
 		{Message{ContentType: 4, Content: MessageContent{FileName: "a.txt"}}, "[文件] a.txt"},
 		{Message{ContentType: 7}, "[表情]"},
+		{Message{ContentType: 10}, "[视频]"},
 		{Message{ContentType: 11}, "[语音]"},
+		{Message{ContentType: 12}, "[视频]"},
 		{Message{ContentType: 99, Content: MessageContent{Text: "fallback"}}, "fallback"},
 		{Message{ContentType: 99}, "[消息类型 99]"},
 	}
