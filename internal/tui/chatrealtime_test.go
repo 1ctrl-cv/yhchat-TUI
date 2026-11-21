@@ -276,3 +276,25 @@ func TestChatRecallOwnMessage(t *testing.T) {
 		t.Fatalf("recall tip not rendered\n%s", app.View())
 	}
 }
+
+// TestChatWheelUpAutoLoadsOlder verifies scrolling up with the mouse wheel at
+// the top of the history automatically fetches the previous page.
+func TestChatWheelUpAutoLoadsOlder(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	app.chat.msgHasMore[testGroupChatID] = true
+
+	inner := app.chat.innerWidth()
+	convW := app.chat.convPanelWidth(inner)
+	chatStart := sidebarWidth + 2*panelGap + convW
+	x, y := mouseTerminalXY(chatStart+2, 3)
+	cmd := sendMouse(t, app, x, y, tea.MouseButtonWheelUp, tea.MouseActionPress)
+	if cmd == nil {
+		t.Fatal("wheel up at the top should prefetch older messages")
+	}
+	app.Update(waitFor[olderMessagesLoadedMsg](t, cmd))
+	if len(ts.olderRequests) != 1 || ts.olderRequests[0] != "gm-1" {
+		t.Fatalf("older requests = %v", ts.olderRequests)
+	}
+}

@@ -554,6 +554,11 @@ func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd
 			return m.loadOlderMessages()
 		}
 		m.moveMsgSelection(-1)
+		if m.selectedMsg <= 3 {
+			if loadCmd := m.autoLoadOlderCmd(); loadCmd != nil {
+				return m, loadCmd
+			}
+		}
 	case "down":
 		m.moveMsgSelection(1)
 	case "pgup":
@@ -561,11 +566,19 @@ func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd
 			return m.loadOlderMessages()
 		}
 		m.moveMsgSelection(-6)
+		if m.selectedMsg <= 3 {
+			if loadCmd := m.autoLoadOlderCmd(); loadCmd != nil {
+				return m, loadCmd
+			}
+		}
 	case "pgdown":
 		m.moveMsgSelection(6)
 	case "home", "g":
 		m.selectedMsg = 0
 		m.ensureSelectedVisible()
+		if loadCmd := m.autoLoadOlderCmd(); loadCmd != nil {
+			return m, loadCmd
+		}
 	case "end", "G":
 		if conv := m.selectedConv(); conv != nil {
 			m.selectedMsg = maxInt(0, len(m.messages[conv.ChatID])-1)
@@ -987,6 +1000,40 @@ func (m mainWindowModel) loadOlderMessages() (mainWindowModel, tea.Cmd) {
 	}
 	m.loadingOlder = true
 	return m, tea.Batch(m.spinner.Tick, loadOlderMessagesCmd(m.client, m.token, *conv, messages[0].MsgID))
+}
+
+// autoLoadOlderCmd prefetches the previous history page when the viewport is
+// close to the top, so scrolling up keeps loading older messages automatically.
+func (m *mainWindowModel) autoLoadOlderCmd() tea.Cmd {
+	if m.loadingOlder {
+		return nil
+	}
+	conv := m.selectedConv()
+	if conv == nil {
+		return nil
+	}
+	if has, ok := m.msgHasMore[conv.ChatID]; ok && !has {
+		return nil
+	}
+	messages := m.messages[conv.ChatID]
+	if len(messages) == 0 || messages[0].MsgID == "" {
+		return nil
+	}
+	m.loadingOlder = true
+	return tea.Batch(m.spinner.Tick, loadOlderMessagesCmd(m.client, m.token, *conv, messages[0].MsgID))
+}
+
+// nearMessageTop reports whether the viewport is within threshold lines of the
+// oldest loaded message.
+func (m mainWindowModel) nearMessageTop(threshold int) bool {
+	height := m.messageViewportHeight()
+	lines := m.messageLines()
+	maxOffset := maxInt(0, len(lines)-height)
+	offset := m.msgOffset
+	if m.msgFollow {
+		offset = maxOffset
+	}
+	return offset <= threshold
 }
 
 // atMessageTop reports whether the message viewport is scrolled to the top.
@@ -1420,6 +1467,11 @@ func (m mainWindowModel) handleMouse(msg tea.MouseMsg) (mainWindowModel, tea.Cmd
 			return m, m.ensureMessagesCmd()
 		default:
 			m.scrollMessages(delta * 3)
+			if delta < 0 && m.nearMessageTop(3) {
+				if loadCmd := m.autoLoadOlderCmd(); loadCmd != nil {
+					return m, loadCmd
+				}
+			}
 			return m, nil
 		}
 	}
