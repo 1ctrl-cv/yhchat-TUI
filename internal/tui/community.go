@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"yhchat-tui/internal/api"
+	"yhchat-tui/internal/logging"
 )
 
 // communityFocus identifies the focused pane of the community page.
@@ -360,6 +361,7 @@ func (m communityModel) handleLoadError(err error, prefix string) (communityMode
 	if api.IsSessionExpired(err) {
 		return m, func() tea.Msg { return expiringTokenMsg{err: err} }
 	}
+	logging.Error("%s: %v", prefix, err)
 	m.errText = prefix + ": " + api.FriendlyMessage(err)
 	return m, nil
 }

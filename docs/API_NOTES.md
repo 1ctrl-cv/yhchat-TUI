@@ -266,3 +266,7 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 
 - 目录 `~/.yhchat-tui/log/`，文件 `yhchat-tui.log`，超过 5MB 轮转为 `.1/.2/.3`。
 - 记录 HTTP 方法/路径/状态码/耗时（DEBUG 级需 `YHCHAT_DEBUG=1`）、WS 连接/断开/事件命令、启动/退出/错误；不记录 token、消息正文与文件内容。
+
+## 社区文章列表的 amountNum（2026-11 实测）
+
+真实 `POST /v1/community/posts/post-list` 响应里 `amountNum`（打赏金额）是**小数**（如 `22.01`、`0.1`），不能按整数解析；否则整个文章列表 JSON 解码失败，页面显示「解析文章列表失败」。`Post.AmountNum` 与 `Comment.AmountNum` 均按 `float64` 解码。其余计数字段实测仍为整数。

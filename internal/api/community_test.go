@@ -96,7 +96,7 @@ const postListJSON = `{
         "likeNum": 2,
         "commentNum": 4,
         "collectNum": 6,
-        "amountNum": 1,
+        "amountNum": 22.01,
         "isSticky": 0,
         "senderNickname": "文章作者",
         "senderAvatar": "https://chat-img.example.com/avatar.png",
@@ -424,7 +424,7 @@ func TestPosts(t *testing.T) {
 		post.SenderNicknameID != 123 || post.SenderAvatarID != 84 || post.GroupID != "554470989" ||
 		post.Title != "文章标题" || post.ContentType != 2 || post.Content != "文章内容部分预览" ||
 		post.CreateTime != 1754382613 || post.EditTime != 1754382741 || post.LastActive != 1754474179 ||
-		post.LikeNum != 2 || post.CommentNum != 4 || post.CollectNum != 6 || post.AmountNum != 1 ||
+		post.LikeNum != 2 || post.CommentNum != 4 || post.CollectNum != 6 || post.AmountNum != 22.01 ||
 		post.SenderNickname != "文章作者" || post.CreateTimeText != "2025-08-05 16:30:13" ||
 		post.IsLiked != "1" || post.IsVip != 1 {
 		t.Fatalf("unexpected post: %+v", post)

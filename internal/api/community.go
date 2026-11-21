@@ -73,32 +73,32 @@ func (c *Community) UnmarshalJSON(data []byte) error {
 
 // Post is one community article.
 type Post struct {
-	ID               int64  `json:"id"`
-	BaID             int64  `json:"baId"`
-	SenderID         string `json:"senderId"`
-	SenderNicknameID int64  `json:"senderNicknameId"`
-	SenderAvatarID   int64  `json:"senderAvatarId"`
-	GroupID          string `json:"groupId"`
-	Title            string `json:"title"`
-	ContentType      int32  `json:"contentType"` // 1 文本, 2 markdown
-	Content          string `json:"content"`
-	DelTime          int64  `json:"delTime"`
-	CreateTime       int64  `json:"createTime"`
-	UpdateTime       int64  `json:"updateTime"`
-	EditTime         int64  `json:"editTime"`
-	LastActive       int64  `json:"lastActive"`
-	LikeNum          int64  `json:"likeNum"`
-	CommentNum       int64  `json:"commentNum"`
-	CollectNum       int64  `json:"collectNum"`
-	AmountNum        int64  `json:"amountNum"`
-	IsSticky         int64  `json:"isSticky"` // 置顶时间戳，0 表示未置顶
-	SenderNickname   string `json:"senderNickname"`
-	SenderAvatar     string `json:"senderAvatar"`
-	CreateTimeText   string `json:"createTimeText"`
-	IsLiked          string `json:"isLiked"`
-	IsCollected      int32  `json:"isCollected"`
-	IsReward         int32  `json:"isReward"`
-	IsVip            int32  `json:"isVip"`
+	ID               int64   `json:"id"`
+	BaID             int64   `json:"baId"`
+	SenderID         string  `json:"senderId"`
+	SenderNicknameID int64   `json:"senderNicknameId"`
+	SenderAvatarID   int64   `json:"senderAvatarId"`
+	GroupID          string  `json:"groupId"`
+	Title            string  `json:"title"`
+	ContentType      int32   `json:"contentType"` // 1 文本, 2 markdown
+	Content          string  `json:"content"`
+	DelTime          int64   `json:"delTime"`
+	CreateTime       int64   `json:"createTime"`
+	UpdateTime       int64   `json:"updateTime"`
+	EditTime         int64   `json:"editTime"`
+	LastActive       int64   `json:"lastActive"`
+	LikeNum          int64   `json:"likeNum"`
+	CommentNum       int64   `json:"commentNum"`
+	CollectNum       int64   `json:"collectNum"`
+	AmountNum        float64 `json:"amountNum"` // 打赏金额，真实接口会返回小数（如 22.01）
+	IsSticky         int64   `json:"isSticky"`  // 置顶时间戳，0 表示未置顶
+	SenderNickname   string  `json:"senderNickname"`
+	SenderAvatar     string  `json:"senderAvatar"`
+	CreateTimeText   string  `json:"createTimeText"`
+	IsLiked          string  `json:"isLiked"`
+	IsCollected      int32   `json:"isCollected"`
+	IsReward         int32   `json:"isReward"`
+	IsVip            int32   `json:"isVip"`
 }
 
 // UnmarshalJSON decodes a Post, tolerating both shapes the API uses for the
@@ -132,20 +132,20 @@ type PostDetail struct {
 
 // Comment is one comment below a community article.
 type Comment struct {
-	ID             int64  `json:"id"`
-	PostID         int64  `json:"postId"`
-	ParentID       int64  `json:"parentId"`
-	SenderID       string `json:"senderId"`
-	Content        string `json:"content"`
-	CreateTime     int64  `json:"createTime"`
-	LikeNum        int64  `json:"likeNum"`
-	RepliesNum     int64  `json:"repliesNum"`
-	AmountNum      int64  `json:"amountNum"`
-	SenderNickname string `json:"senderNickname"`
-	SenderAvatar   string `json:"senderAvatar"`
-	CreateTimeText string `json:"createTimeText"`
-	IsLiked        string `json:"isLiked"`
-	IsVip          int32  `json:"isVip"`
+	ID             int64   `json:"id"`
+	PostID         int64   `json:"postId"`
+	ParentID       int64   `json:"parentId"`
+	SenderID       string  `json:"senderId"`
+	Content        string  `json:"content"`
+	CreateTime     int64   `json:"createTime"`
+	LikeNum        int64   `json:"likeNum"`
+	RepliesNum     int64   `json:"repliesNum"`
+	AmountNum      float64 `json:"amountNum"` // 打赏金额，可能是小数
+	SenderNickname string  `json:"senderNickname"`
+	SenderAvatar   string  `json:"senderAvatar"`
+	CreateTimeText string  `json:"createTimeText"`
+	IsLiked        string  `json:"isLiked"`
+	IsVip          int32   `json:"isVip"`
 }
 
 // UnmarshalJSON decodes a Comment with the same isLiked tolerance as Post: the
