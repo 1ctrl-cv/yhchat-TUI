@@ -13,6 +13,7 @@
 //	yhchat-tui -version        # print version
 //	yhchat-tui -config FILE    # use a custom config file
 //	yhchat-tui -server URL     # point at another API server (debug/mock)
+//	yhchat-tui -debug          # write HTTP/WebSocket debug logs
 package main
 
 import (
@@ -34,6 +35,7 @@ func main() {
 		showVersion = flag.Bool("version", false, "打印版本号并退出")
 		configPath  = flag.String("config", "", "配置文件路径（默认: ~/.yhchat-tui/config.json）")
 		serverURL   = flag.String("server", "", "API 服务器地址（默认: "+api.DefaultBaseURL+"）")
+		debugLog    = flag.Bool("debug", false, "记录 HTTP/WebSocket 调试日志")
 	)
 	flag.Parse()
 
@@ -45,7 +47,7 @@ func main() {
 		return
 	}
 
-	if initErr := logging.Init(os.Getenv("YHCHAT_DEBUG") == "1"); initErr != nil {
+	if initErr := logging.Init(*debugLog); initErr != nil {
 		fmt.Fprintf(os.Stderr, "日志提示: %v\n", initErr)
 	} else {
 		defer logging.Close()

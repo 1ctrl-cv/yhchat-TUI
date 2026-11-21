@@ -264,8 +264,8 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 
 ## 日志
 
-- 目录 `~/.yhchat-tui/log/`：按天生成 `yhchat-tui-YYYY-MM-DD.log`；当天文件超过 5MB 再切分为 `.1.log`…`.5.log`；保留最近 7 天。参数为 `internal/logging` 中的代码常量（`maxLogSize` / `keepLogDays` / `keepSizeBackups`），不使用环境变量。旧版单文件日志会在启动时自动迁移为日期文件名。
-- 记录 HTTP 方法/路径/状态码/耗时（DEBUG 级需 `YHCHAT_DEBUG=1`）、WS 连接/断开/事件命令、启动/退出/错误；不记录 token、消息正文与文件内容。
+- 目录 `~/.yhchat-tui/log/`：按天生成 `yhchat-tui-YYYY-MM-DD.log`；当天文件超过 5MB 再切分为 `.1.log`…`.5.log`；保留最近 7 天。参数为 `internal/logging` 中的代码常量（`maxLogSize` / `keepLogDays` / `keepSizeBackups`），不使用环境变量。
+- 记录 HTTP 方法/路径/状态码/耗时（DEBUG 级需启动参数 `-debug`）、WS 连接/断开/事件命令、启动/退出/错误；不记录 token、消息正文与文件内容。
 
 ## 社区文章列表的 amountNum（2026-11 实测）
 
@@ -280,4 +280,5 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 - **文章列表 `amountNum`**：见上一节，可能为小数。
 - **社区分页**：`/v1/community/posts/post-list` 与 `/v1/community/ba/following-ba-list` 的 `page`/`size` 有效（实测热门分区 817 篇文章分页正常）；界面在列表底部继续下翻时自动加载下一页。
 - **申请/邀请列表**：`/v1/friend/request-list` 的 `result`（字段 13）0=待处理、1=已通过、2=已拒绝、3=过期、4=已解散；`pending`（字段 4）只统计待处理。实测账号 111 条记录中仅 2 条待处理，其余已处理，界面现在会标注状态并禁止重复操作。
+
 

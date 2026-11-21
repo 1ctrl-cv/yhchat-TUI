@@ -115,32 +115,6 @@ func TestSizeBackupLimit(t *testing.T) {
 	}
 }
 
-// TestLegacyMigration verifies the old single-file scheme is renamed.
-func TestLegacyMigration(t *testing.T) {
-	dir := t.TempDir()
-	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)
-	legacy := filepath.Join(dir, "yhchat-tui.log")
-	if err := os.WriteFile(legacy, []byte("legacy-line\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	mtime := now.AddDate(0, 0, -1)
-	if err := os.Chtimes(legacy, mtime, mtime); err != nil {
-		t.Fatal(err)
-	}
-	logFile, err := newRotatingFile(dir, 1<<20, 7, 3, func() time.Time { return now })
-	if err != nil {
-		t.Fatalf("newRotatingFile: %v", err)
-	}
-	defer func() { _ = logFile.Close() }()
-	migrated := activeLogPath(dir, mtime.Format(dayFormat))
-	if data, err := os.ReadFile(migrated); err != nil || !strings.Contains(string(data), "legacy-line") {
-		t.Fatalf("migrated log = %q (err %v)", data, err)
-	}
-	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Fatalf("legacy log should be renamed, stat err = %v", err)
-	}
-}
-
 // TestParseLogName covers the dated naming scheme parser.
 func TestParseLogName(t *testing.T) {
 	date, backup, ok := parseLogName("yhchat-tui-2026-11-21.log")

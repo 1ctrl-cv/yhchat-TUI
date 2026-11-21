@@ -77,8 +77,7 @@ func IsFallback() bool {
 
 // Init opens the log file. When the primary directory cannot be written it
 // falls back to <temp>/yhchat-tui/log and then to <cwd>/.yhchat-tui-log. When
-// debug is true, or YHCHAT_DEBUG=1 is set, detailed HTTP/WS diagnostics are
-// written as well.
+// debug is true, detailed HTTP/WS diagnostics are written as well.
 func Init(debug bool) error {
 	candidates := []string{Dir()}
 	candidates = append(candidates, filepath.Join(os.TempDir(), "yhchat-tui", logDirName))
@@ -102,7 +101,7 @@ func Init(debug bool) error {
 		logPath = opened.Path()
 		fallback = i > 0
 		enabled = true
-		debugLog = debug || os.Getenv("YHCHAT_DEBUG") == "1"
+		debugLog = debug
 		logger = log.New(opened, "", log.LstdFlags|log.Lmicroseconds)
 		mu.Unlock()
 
@@ -142,7 +141,6 @@ func newRotatingFile(dir string, maxBytes int64, keepDays, keepBackups int, now 
 		keepBackups: keepBackups,
 		now:         now,
 	}
-	migrateLegacyFiles(dir)
 	if err := w.openActiveLocked(now()); err != nil {
 		return nil, err
 	}
@@ -345,34 +343,6 @@ func parseLogName(name string) (date string, backup int, ok bool) {
 		backup = index
 	}
 	return match[1], backup, true
-}
-
-// migrateLegacyFiles renames logs from the old single-file scheme
-// (yhchat-tui.log / yhchat-tui.log.1) to the dated scheme, best effort.
-func migrateLegacyFiles(dir string) {
-	for _, legacy := range []string{logBase + ".log", logBase + ".log.1", logBase + ".log.2", logBase + ".log.3"} {
-		path := filepath.Join(dir, legacy)
-		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
-			continue
-		}
-		date := info.ModTime().Format(dayFormat)
-		if _, _, ok := parseLogName(legacy); ok {
-			continue
-		}
-		target := activeLogPath(dir, date)
-		if strings.HasSuffix(legacy, ".log.1") {
-			target = backupLogPath(dir, date, 1)
-		} else if strings.HasSuffix(legacy, ".log.2") {
-			target = backupLogPath(dir, date, 2)
-		} else if strings.HasSuffix(legacy, ".log.3") {
-			target = backupLogPath(dir, date, 3)
-		}
-		if _, statErr := os.Stat(target); statErr == nil {
-			continue
-		}
-		_ = os.Rename(path, target)
-	}
 }
 
 func write(level, format string, args ...any) {

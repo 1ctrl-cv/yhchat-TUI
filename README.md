@@ -151,10 +151,10 @@ yhchat-tui -version      # 单独构建显示 0.1.0-dev，全量构建会注入�
 ### 命令行参数
 
 ```
-yhchat-tui [-config FILE] [-server URL] [-version]
+yhchat-tui [-config FILE] [-server URL] [-debug] [-version]
 
   -config FILE   指定配置文件路径（默认 ~/.yhchat-tui/config.json）
-  -server URL    指定 API 服务器地址（默认 https://chat-go.jwzhd.com，调试用）
+  -server URL    指定 API 服务器地址（默认 https://chat-go.jwzhd.com，调试用）`n-debug         记录 HTTP/WebSocket 调试日志到日志文件
   -version       打印版本号
 ```
 
@@ -231,6 +231,7 @@ vendor/                    依赖（离线构建）
 
 本项目为第三方非官方实现，与云湖官方无关。API 属于公开文档记录的接口，可能随时变更；
 请勿将本项目用于违反服务条款的用途，并妥善保管自己的账号凭据与 token。
+
 
 
 
