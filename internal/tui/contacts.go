@@ -260,7 +260,7 @@ func (m contactsModel) handleMouse(msg tea.MouseMsg) (contactsModel, tea.Cmd) {
 
 	if delta := wheelDelta(msg); delta != 0 {
 		if x >= listStart && x < detailStart {
-			m.moveSelection(delta * 2)
+			m.moveSelection(delta)
 		}
 		return m, nil
 	}

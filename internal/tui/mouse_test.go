@@ -275,3 +275,64 @@ func TestLoginMouseCanSwitchBackToSMS(t *testing.T) {
 		t.Fatalf("after second SMS tab click method = %v, want SMS", app.login.method)
 	}
 }
+
+// wheelMouse sends one mouse-wheel notch at body-local coordinates.
+func wheelMouse(t *testing.T, app *App, x, y int, up bool) tea.Cmd {
+	t.Helper()
+	button := tea.MouseButtonWheelDown
+	if up {
+		button = tea.MouseButtonWheelUp
+	}
+	tx, ty := mouseTerminalXY(x, y)
+	return sendMouse(t, app, tx, ty, button, tea.MouseActionPress)
+}
+
+// TestWheelMovesSelectionInsteadOfScrolling verifies that wheel notches move
+// the selected conversation/message/contact/menu item.
+func TestWheelMovesSelectionInsteadOfScrolling(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+
+	// Conversation list: one notch moves the selection by exactly one row.
+	app.chat.selected = 0
+	cmd := wheelMouse(t, app, 8, 3, false)
+	applyAll(t, app, cmd)
+	if app.chat.selected != 1 {
+		t.Fatalf("conversation selection = %d, want 1", app.chat.selected)
+	}
+	wheelMouse(t, app, 8, 3, true)
+	if app.chat.selected != 0 {
+		t.Fatalf("conversation selection after wheel up = %d, want 0", app.chat.selected)
+	}
+
+	// Message area: wheel up/down changes the selected message.
+	inner := app.chat.innerWidth()
+	convW := app.chat.convPanelWidth(inner)
+	chatStart := sidebarWidth + 2*panelGap + convW
+	before := app.chat.selectedMsg
+	wheelMouse(t, app, chatStart+2, 3, true)
+	if app.chat.selectedMsg != before-1 {
+		t.Fatalf("selected message = %d, want %d", app.chat.selectedMsg, before-1)
+	}
+	wheelMouse(t, app, chatStart+2, 3, false)
+	if app.chat.selectedMsg != before {
+		t.Fatalf("selected message after wheel down = %d, want %d", app.chat.selectedMsg, before)
+	}
+
+	// Contacts list.
+	switchToSection(t, app, sectionContacts)
+	before = app.contacts.selected
+	wheelMouse(t, app, 10, 3, false)
+	if app.contacts.selected != before+1 {
+		t.Fatalf("contacts selection = %d, want %d", app.contacts.selected, before+1)
+	}
+
+	// Profile menu.
+	openHomeScreen(t, app)
+	before = app.home.menuIndex
+	wheelMouse(t, app, sidebarWidth+panelGap+2, 3, false)
+	if app.home.menuIndex != before+1 {
+		t.Fatalf("menu selection = %d, want %d", app.home.menuIndex, before+1)
+	}
+}

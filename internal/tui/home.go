@@ -1155,7 +1155,7 @@ func (m homeModel) handleMouse(msg tea.MouseMsg) (homeModel, tea.Cmd) {
 
 	if delta := wheelDelta(msg); delta != 0 {
 		if x >= menuStart && x < detailStart {
-			m.menuIndex = clamp(m.menuIndex+delta*2, 0, len(profileMenuItems)-1)
+			m.menuIndex = clamp(m.menuIndex+delta, 0, len(profileMenuItems)-1)
 			m.ensureMenuVisible()
 		}
 		return m, nil

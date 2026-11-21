@@ -1463,14 +1463,23 @@ func (m mainWindowModel) handleMouse(msg tea.MouseMsg) (mainWindowModel, tea.Cmd
 		case x < listStart:
 			return m, nil
 		case x < chatStart:
-			m.moveSelection(delta * 2)
+			m.moveSelection(delta)
 			return m, m.ensureMessagesCmd()
 		default:
-			m.scrollMessages(delta * 3)
-			if delta < 0 && m.nearMessageTop(3) {
-				if loadCmd := m.autoLoadOlderCmd(); loadCmd != nil {
-					return m, loadCmd
+			// Wheels move the selected message like ↑/↓ instead of scrolling the
+			// viewport independently.
+			if delta < 0 {
+				if m.selectedMsg <= 0 {
+					return m.loadOlderMessages()
 				}
+				m.moveMsgSelection(-1)
+				if m.selectedMsg <= 3 {
+					if loadCmd := m.autoLoadOlderCmd(); loadCmd != nil {
+						return m, loadCmd
+					}
+				}
+			} else {
+				m.moveMsgSelection(1)
 			}
 			return m, nil
 		}
