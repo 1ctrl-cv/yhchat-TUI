@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -106,6 +107,31 @@ type postCollectDoneMsg struct {
 	err       error
 }
 
+// articleSavedMsg reports creating/editing an article.
+type articleSavedMsg struct {
+	created bool
+	err     error
+}
+
+// articleDeletedMsg reports deleting an article.
+type articleDeletedMsg struct {
+	postID int64
+	err    error
+}
+
+// commentLikeDoneMsg reports a comment like toggle.
+type commentLikeDoneMsg struct {
+	commentID int64
+	liked     bool
+	err       error
+}
+
+// commentDeletedMsg reports deleting a comment/reply.
+type commentDeletedMsg struct {
+	commentID int64
+	err       error
+}
+
 // communityModel is the "社区" page.
 type communityModel struct {
 	client *api.Client
@@ -141,6 +167,18 @@ type communityModel struct {
 	commentTarget   string
 	commentPosting  bool
 
+	// Article editor state (new/edit article).
+	editorMode        int
+	editorTitle       textinput.Model
+	editorContent     textarea.Model
+	editorContentType int32
+	editorPostID      int64
+	editorFocus       int
+	editorSaving      bool
+
+	deleteArticleConfirm bool
+	commentDeleteConfirm bool
+
 	loading bool
 	errText string
 	okText  string
@@ -149,15 +187,31 @@ type communityModel struct {
 
 // newCommunityModel creates the community page.
 func newCommunityModel(client *api.Client, token string) communityModel {
+	titleInput := newTextInput("article title", false, 200)
+	contentArea := textarea.New()
+	contentArea.Placeholder = "article content (Markdown supported)"
+	contentArea.CharLimit = 20000
+	contentArea.ShowLineNumbers = false
+	contentArea.Blur()
 	return communityModel{
 		client:        client,
 		token:         token,
 		focus:         communityList,
 		sidebarCursor: sectionCommunity,
 		commentInput:  newTextInput("comment...", false, 500),
+		editorTitle:   titleInput,
+		editorContent: contentArea,
+		editorFocus:   0,
 		spinner:       newSpinner(),
 	}
 }
+
+// Editor modes for the article editor.
+const (
+	editorNone   = 0
+	editorCreate = 1
+	editorEdit   = 2
+)
 
 // withUser attaches the account profile.
 func (m communityModel) withUser(user *api.UserInfo) communityModel {
@@ -232,6 +286,45 @@ func loadPostDetailCmd(client *api.Client, token string, postID int64) tea.Cmd {
 			comments = nil
 		}
 		return postDetailMsg{postID: postID, detail: detail, comments: comments, commentsTotal: total}
+	}
+}
+
+// saveArticleCmd creates or edits an article.
+func saveArticleCmd(client *api.Client, token string, baID, postID int64, created bool, title, content string, contentType int32) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		if created {
+			return articleSavedMsg{created: true, err: client.CreatePost(ctx, token, baID, "", title, content, contentType)}
+		}
+		return articleSavedMsg{created: false, err: client.EditPost(ctx, token, postID, title, content, contentType)}
+	}
+}
+
+// deleteArticleCmd deletes one article.
+func deleteArticleCmd(client *api.Client, token string, postID int64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return articleDeletedMsg{postID: postID, err: client.DeletePost(ctx, token, postID)}
+	}
+}
+
+// toggleCommentLikeCmd toggles the like state of one comment.
+func toggleCommentLikeCmd(client *api.Client, token string, commentID int64, liked bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return commentLikeDoneMsg{commentID: commentID, liked: liked, err: client.LikeComment(ctx, token, commentID)}
+	}
+}
+
+// deleteCommentCmd deletes one comment/reply.
+func deleteCommentCmd(client *api.Client, token string, commentID int64) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+		return commentDeletedMsg{commentID: commentID, err: client.DeleteComment(ctx, token, commentID)}
 	}
 }
 
@@ -455,6 +548,91 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 		m.errText = ""
 		return m, nil
 
+	case articleSavedMsg:
+		m.loading = false
+		m.editorSaving = false
+		if msg.err != nil {
+			return m.handleLoadError(msg.err, "保存文章失败")
+		}
+		created := msg.created
+		m.editorMode = editorNone
+		m.editorTitle.Blur()
+		m.editorContent.Blur()
+		m.errText = ""
+		if created {
+			m.okText = "文章已发布"
+			m.view = communityListView
+			m.focus = communityPosts
+			m.postDetail = nil
+			m.postComments = nil
+			if m.selectedBa != nil {
+				m.loading = true
+				return m, tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID, 1))
+			}
+			return m, nil
+		}
+		m.okText = "文章已更新"
+		if m.postDetail != nil {
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, loadPostDetailCmd(m.client, m.token, m.postDetail.Post.ID))
+		}
+		return m, nil
+
+	case articleDeletedMsg:
+		m.loading = false
+		if msg.err != nil {
+			return m.handleLoadError(msg.err, "删除文章失败")
+		}
+		m.deleteArticleConfirm = false
+		m.view = communityListView
+		m.focus = communityPosts
+		m.postDetail = nil
+		m.postComments = nil
+		m.commentMode = false
+		m.okText = "文章已删除"
+		m.errText = ""
+		if m.selectedBa != nil {
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID, 1))
+		}
+		return m, nil
+
+	case commentLikeDoneMsg:
+		if msg.err != nil {
+			if comment := commentByID(m.postComments, msg.commentID); comment != nil {
+				if msg.liked {
+					comment.IsLiked = "0"
+					if comment.LikeNum > 0 {
+						comment.LikeNum--
+					}
+				} else {
+					comment.IsLiked = "1"
+					comment.LikeNum++
+				}
+			}
+			return m.handleLoadError(msg.err, "评论点赞失败")
+		}
+		if msg.liked {
+			m.okText = "已点赞评论"
+		} else {
+			m.okText = "已取消评论点赞"
+		}
+		m.errText = ""
+		return m, nil
+
+	case commentDeletedMsg:
+		m.loading = false
+		if msg.err != nil {
+			return m.handleLoadError(msg.err, "删除评论失败")
+		}
+		m.commentDeleteConfirm = false
+		m.okText = "评论已删除"
+		m.errText = ""
+		if m.postDetail != nil {
+			return m, loadCommentsCmd(m.client, m.token, m.postDetail.Post.ID)
+		}
+		return m, nil
+
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 
@@ -462,6 +640,15 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 		return m.handleKey(msg)
 
 	default:
+		if m.editorMode != editorNone {
+			var cmd tea.Cmd
+			if m.editorFocus == 0 {
+				m.editorTitle, cmd = m.editorTitle.Update(msg)
+			} else {
+				m.editorContent, cmd = m.editorContent.Update(msg)
+			}
+			return m, cmd
+		}
 		if m.view == communityArticleView && m.commentMode {
 			var cmd tea.Cmd
 			m.commentInput, cmd = m.commentInput.Update(msg)
@@ -598,6 +785,40 @@ func (m communityModel) handleLoadError(err error, prefix string) (communityMode
 func (m communityModel) handleKey(msg tea.KeyMsg) (communityModel, tea.Cmd) {
 	key := msg.String()
 
+	// The article editor owns the keyboard while it is open.
+	if m.editorMode != editorNone {
+		switch key {
+		case "esc":
+			m.closeEditor()
+			m.okText = "已取消编辑"
+			return m, nil
+		case "tab":
+			m.editorFocus = 1 - m.editorFocus
+			if m.editorFocus == 0 {
+				m.editorContent.Blur()
+				return m, m.editorTitle.Focus()
+			}
+			m.editorTitle.Blur()
+			return m, m.editorContent.Focus()
+		case "ctrl+t":
+			if m.editorContentType == 2 {
+				m.editorContentType = 1
+			} else {
+				m.editorContentType = 2
+			}
+			return m, nil
+		case "ctrl+s":
+			return m.saveEditor()
+		}
+		var cmd tea.Cmd
+		if m.editorFocus == 0 {
+			m.editorTitle, cmd = m.editorTitle.Update(msg)
+		} else {
+			m.editorContent, cmd = m.editorContent.Update(msg)
+		}
+		return m, cmd
+	}
+
 	// While composing a comment, the input owns all keys except Esc/Enter.
 	if m.view == communityArticleView && m.commentMode {
 		switch key {
@@ -725,6 +946,8 @@ func (m communityModel) handleListKey(key string) (communityModel, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "n":
+		return m.openArticleEditor(editorCreate)
 	case "right":
 		m.focus = communityTabs
 		return m, nil
@@ -763,6 +986,8 @@ func (m communityModel) handlePostsKey(key string) (communityModel, tea.Cmd) {
 			return m, tea.Batch(m.spinner.Tick, loadPostDetailCmd(m.client, m.token, post.ID))
 		}
 		return m, nil
+	case "n":
+		return m.openArticleEditor(editorCreate)
 	case "esc", "left":
 		m.focus = communityList
 		return m, nil
@@ -774,6 +999,217 @@ func (m communityModel) handlePostsKey(key string) (communityModel, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, loadPostsCmd(m.client, m.token, m.selectedBa.ID, 1))
 	}
 	return m, nil
+}
+
+// commentByID finds a comment/reply by ID in a comment tree.
+func commentByID(items []api.Comment, id int64) *api.Comment {
+	for i := range items {
+		if items[i].ID == id {
+			return &items[i]
+		}
+		if found := commentByID(items[i].Replies, id); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// selectedComment returns the comment currently highlighted in the article.
+func (m *communityModel) selectedComment() *api.Comment {
+	index := m.commentIndex
+	var walk func(items []api.Comment) *api.Comment
+	walk = func(items []api.Comment) *api.Comment {
+		for i := range items {
+			if index == 0 {
+				return &items[i]
+			}
+			index--
+			if found := walk(items[i].Replies); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	return walk(m.postComments)
+}
+
+// openArticleEditor opens the full-screen editor for a new or existing article.
+func (m communityModel) openArticleEditor(mode int) (communityModel, tea.Cmd) {
+	if mode == editorEdit {
+		post := m.currentPost()
+		if post == nil {
+			m.errText = "当前没有可编辑的文章"
+			return m, nil
+		}
+		m.editorPostID = post.ID
+		m.editorTitle.SetValue(post.Title)
+		m.editorContent.SetValue(post.Content)
+		m.editorContentType = post.ContentType
+		if m.editorContentType != 1 {
+			m.editorContentType = 2
+		}
+	} else {
+		if m.selectedBa == nil {
+			m.errText = "请先在左侧选择一个分区"
+			return m, nil
+		}
+		m.editorPostID = 0
+		m.editorTitle.SetValue("")
+		m.editorContent.SetValue("")
+		m.editorContentType = 2
+	}
+	m.editorMode = mode
+	m.editorFocus = 0
+	m.editorSaving = false
+	m.errText = ""
+	m.okText = ""
+	m.editorContent.Blur()
+	return m, m.editorTitle.Focus()
+}
+
+// closeEditor cancels the article editor.
+func (m *communityModel) closeEditor() {
+	m.editorMode = editorNone
+	m.editorSaving = false
+	m.editorTitle.Blur()
+	m.editorContent.Blur()
+}
+
+// saveEditor validates and submits the editor contents.
+func (m communityModel) saveEditor() (communityModel, tea.Cmd) {
+	if m.editorSaving {
+		return m, nil
+	}
+	title := strings.TrimSpace(m.editorTitle.Value())
+	content := strings.TrimSpace(m.editorContent.Value())
+	if title == "" {
+		m.errText = "文章标题不能为空"
+		return m, nil
+	}
+	if content == "" {
+		m.errText = "文章内容不能为空"
+		return m, nil
+	}
+	if m.editorContentType != 1 && m.editorContentType != 2 {
+		m.editorContentType = 2
+	}
+	m.editorSaving = true
+	m.loading = true
+	m.errText = ""
+	created := m.editorMode == editorCreate
+	baID := int64(0)
+	if m.selectedBa != nil {
+		baID = m.selectedBa.ID
+	}
+	return m, tea.Batch(m.spinner.Tick,
+		saveArticleCmd(m.client, m.token, baID, m.editorPostID, created, title, content, m.editorContentType))
+}
+
+// requestDeleteArticle implements the two-step article deletion confirmation.
+func (m communityModel) requestDeleteArticle() (communityModel, tea.Cmd) {
+	post := m.currentPost()
+	if post == nil {
+		return m, nil
+	}
+	if !m.deleteArticleConfirm {
+		m.deleteArticleConfirm = true
+		m.okText = "再按 d 确认删除文章，Esc 取消"
+		return m, nil
+	}
+	m.deleteArticleConfirm = false
+	m.loading = true
+	m.errText = ""
+	return m, tea.Batch(m.spinner.Tick, deleteArticleCmd(m.client, m.token, post.ID))
+}
+
+// toggleSelectedCommentLike applies the comment like toggle optimistically.
+func (m communityModel) toggleSelectedCommentLike() (communityModel, tea.Cmd) {
+	comment := m.selectedComment()
+	if comment == nil {
+		m.errText = "当前没有选中的评论"
+		return m, nil
+	}
+	liked := comment.IsLiked == "1"
+	if liked {
+		comment.IsLiked = "0"
+		if comment.LikeNum > 0 {
+			comment.LikeNum--
+		}
+	} else {
+		comment.IsLiked = "1"
+		comment.LikeNum++
+	}
+	m.errText = ""
+	return m, tea.Batch(m.spinner.Tick,
+		toggleCommentLikeCmd(m.client, m.token, comment.ID, !liked))
+}
+
+// requestDeleteComment implements the two-step comment deletion confirmation.
+func (m communityModel) requestDeleteComment() (communityModel, tea.Cmd) {
+	comment := m.selectedComment()
+	if comment == nil {
+		m.errText = "当前没有选中的评论"
+		return m, nil
+	}
+	if !m.commentDeleteConfirm {
+		m.commentDeleteConfirm = true
+		m.okText = "再按 D 确认删除评论，Esc 取消"
+		return m, nil
+	}
+	m.commentDeleteConfirm = false
+	m.loading = true
+	m.errText = ""
+	return m, tea.Batch(m.spinner.Tick, deleteCommentCmd(m.client, m.token, comment.ID))
+}
+
+// editorView renders the full-screen article editor.
+func (m communityModel) editorView() string {
+	width, height := screenSize(m.width, m.height)
+	bodyH := maxInt(8, height-4)
+	inner := width - 2*chromePadX
+	title := "新建文章"
+	if m.editorMode == editorEdit {
+		title = "编辑文章"
+	}
+	hint := "Tab 切换标题/正文 · Ctrl+T 内容类型 · Ctrl+S 保存 · Esc 取消"
+	if m.editorSaving {
+		hint = "正在保存文章…"
+	}
+	return screenChromeTop(width, height,
+		titleAccentStyle.Render("▌ 云湖 TUI"),
+		subtitleStyle.Render("社区 · "+title),
+		m.editorLines(inner, bodyH),
+		hint)
+}
+
+// editorLines builds the body of the article editor.
+func (m communityModel) editorLines(width, height int) []string {
+	titleInput := m.editorTitle
+	titleInput.Width = maxInt(10, width-4)
+	titleStyle := inputStyle
+	if m.editorFocus == 0 {
+		titleStyle = inputFocusedStyle
+	}
+	contentArea := m.editorContent
+	contentArea.SetWidth(maxInt(10, width-2))
+	contentArea.SetHeight(maxInt(5, height-8))
+	contentStyle := inputStyle
+	if m.editorFocus == 1 {
+		contentStyle = inputFocusedStyle
+	}
+	typeLabel := "Markdown"
+	if m.editorContentType == 1 {
+		typeLabel = "文本"
+	}
+	var lines []string
+	lines = append(lines, labelStyle.Render("标题"))
+	lines = append(lines, strings.Split(titleStyle.Width(width).Render(titleInput.View()), "\n")...)
+	lines = append(lines, hintStyle.Render(truncate("内容类型: "+typeLabel+"（Ctrl+T 切换）", width)))
+	lines = append(lines, "")
+	lines = append(lines, labelStyle.Render("正文"))
+	lines = append(lines, contentStyle.Render(contentArea.View()))
+	lines = append(lines, m.statusLine(width))
+	return padLines(lines, height, width)
 }
 
 // beginComment opens the comment input for a top-level comment or a reply.
@@ -889,6 +1325,30 @@ func (m *communityModel) ensureCommentVisible() {
 
 // handleArticleKey handles the article view (scrolling, reactions, comments).
 func (m communityModel) handleArticleKey(key string) (communityModel, tea.Cmd) {
+	if m.deleteArticleConfirm {
+		switch key {
+		case "d":
+			return m.requestDeleteArticle()
+		case "esc":
+			m.deleteArticleConfirm = false
+			m.okText = "已取消删除"
+			return m, nil
+		default:
+			m.deleteArticleConfirm = false
+		}
+	}
+	if m.commentDeleteConfirm {
+		switch key {
+		case "D":
+			return m.requestDeleteComment()
+		case "esc":
+			m.commentDeleteConfirm = false
+			m.okText = "已取消删除"
+			return m, nil
+		default:
+			m.commentDeleteConfirm = false
+		}
+	}
 	switch key {
 	case "up":
 		if m.articleOffset > 0 {
@@ -907,6 +1367,14 @@ func (m communityModel) handleArticleKey(key string) (communityModel, tea.Cmd) {
 	case "end", "G":
 		m.articleOffset = 1 << 20
 		m.clampArticleOffset()
+	case "e":
+		return m.openArticleEditor(editorEdit)
+	case "d":
+		return m.requestDeleteArticle()
+	case "L":
+		return m.toggleSelectedCommentLike()
+	case "D":
+		return m.requestDeleteComment()
 	case "j":
 		m.moveCommentSelection(1)
 	case "k":
@@ -1103,6 +1571,9 @@ func (m communityModel) commentInputLine(width int) string {
 
 // View implements tea.Model for the community page.
 func (m communityModel) View() string {
+	if m.editorMode != editorNone {
+		return m.editorView()
+	}
 	width, height := screenSize(m.width, m.height)
 	inner := width - 2*chromePadX
 	bodyH := maxInt(8, height-4)
@@ -1303,6 +1774,9 @@ func (m communityModel) articleColumn(bodyH, width int) []string {
 			view = append(view, "")
 		}
 	}
+	if m.commentMode {
+		view = append(view, m.commentInputLine(width))
+	}
 	view = append(view, m.statusLine(width))
 	return padLines(view, bodyH, width)
 }
@@ -1436,15 +1910,15 @@ func (m communityModel) viewHints() string {
 		if m.commentMode {
 			return "Enter 发送评论 · Esc 取消 · j/k 选择评论 · c 评论 · r 回复"
 		}
-		return "↑↓ 滚动 · j/k 选择评论 · l 点赞 · s 收藏 · c 评论 · r 回复 · Esc 返回分区"
+		return "↑↓ 滚动 · j/k 选评论 · l 赞文章 · s 收藏 · c 评论 · r 回复 · L 赞评论 · D 删评论 · e 编辑 · d 删文章 · Esc 返回"
 	}
 	switch m.focus {
 	case communityTabs:
 		return "←→ 切换分类（热门/全部/关注/我的）· Enter 进入列表 · Esc 返回侧边栏"
 	case communityList:
-		return "↑↓ 选择分区 · Enter 查看文章 · Tab 切换焦点 · r 刷新 · Esc 返回侧边栏"
+		return "↑↓ 选择分区 · Enter 查看文章 · n 发文章 · Tab 切换焦点 · r 刷新 · Esc 返回侧边栏"
 	default:
-		return "↑↓ 选择文章 · Enter 阅读全文 · Esc 返回分区列表 · r 刷新"
+		return "↑↓ 选择文章 · Enter 阅读全文 · n 发文章 · Esc 返回分区列表 · r 刷新"
 	}
 }
 

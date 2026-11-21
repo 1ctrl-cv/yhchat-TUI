@@ -290,3 +290,12 @@ message Status { int64 request_id = 1; int32 code = 2; string msg = 3; }
 - **发表评论 / 回复**：`POST /v1/community/comment/comment`，JSON `{"postId":..,"commentId":..,"content":".."}`；顶层评论 `commentId=0`，楼中楼回复填被回复评论的 `id`。
 - **评论列表**：评论顶层对象里带 `replies` 数组（楼中楼，实测只内嵌部分回复，例如 `repliesNum=9` 只返回 2 条；完整回复可能需要后续接口/分页）。`Comment` 结构已递归解码 `replies`。
 - 客户端界面：文章页 `j/k` 选择评论、`l` 点赞、`s` 收藏、`c` 发顶层评论、`r` 回复选中评论（楼中楼），`Enter` 发送、`Esc` 取消。
+
+## 社区文章/评论完整操作（2026-11 实测）
+
+- **发文章**：`POST /v1/community/posts/create`，JSON `{"baId":..,"title":..,"content":..,"contentType":1|2,"groupId":"","draftId":0}`；成功返回 `data.id`（实测创建返回了文章 ID，虽然文档字段名写的是 audioUrl）。
+- **编辑文章**：`POST /v1/community/posts/edit`，JSON `{"postId":..,"title":..,"content":..,"contentType":1|2}`。
+- **删除文章**：`POST /v1/community/posts/delete`，JSON `{"postId":..}`；删除后 post-detail 返回「文章不存在」。
+- **评论点赞/取消**：`POST /v1/community/comment/comment-like`，JSON `{"id":<评论ID>}`，切换语义；实测点赞后 `isLiked` 变为 "1"。
+- **删除评论/楼中楼**：`POST /v1/community/comment/delete`，JSON **`{"commentId":<评论ID>}`**（不是 `id`，用 `id` 会返回 400 请求参数错误）；实测删除成功。
+- 以上写操作已用临时文章/临时评论实测并清理：创建→编辑→删除文章、创建评论→点赞→取消→删除评论均成功；临时内容已删除。

@@ -519,3 +519,103 @@ func TestCommunityArticleReactionsAndComments(t *testing.T) {
 		t.Fatalf("posted comments = %+v", posted)
 	}
 }
+
+// TestCommunityArticleEditorAndModeration covers the article editor
+// (create/edit/delete), comment like/delete and the comment input visibility.
+func TestCommunityArticleEditorAndModeration(t *testing.T) {
+	ts := newTestServer(t)
+	app, _ := newTestApp(t, ts)
+	loginEmail(t, app)
+	switchToSection(t, app, sectionCommunity)
+	sendKey(t, app, tea.KeyEnter)
+	cmd := sendKey(t, app, tea.KeyEnter)
+	app.Update(waitFor[postDetailMsg](t, cmd))
+
+	runeKey := func(text string) tea.Cmd {
+		t.Helper()
+		model, keyCmd := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)})
+		updated, ok := model.(*App)
+		if !ok {
+			t.Fatalf("unexpected model %T", model)
+		}
+		*app = *updated
+		return keyCmd
+	}
+	ctrlS := func() tea.Cmd {
+		t.Helper()
+		model, keyCmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+		updated, ok := model.(*App)
+		if !ok {
+			t.Fatalf("unexpected model %T", model)
+		}
+		*app = *updated
+		return keyCmd
+	}
+
+	// Comment composer must be visible while typing a comment.
+	app.Update(runeKey("c"))
+	if view := app.View(); !strings.Contains(view, "评论: ") {
+		t.Fatalf("comment input not visible:\n%s", view)
+	}
+	sendKey(t, app, tea.KeyEsc)
+
+	// Comment like and delete (two-step confirmation).
+	app.Update(waitFor[commentLikeDoneMsg](t, runeKey("L")))
+	ts.mu.Lock()
+	commentLikes := append([]int64(nil), ts.commentLikes...)
+	ts.mu.Unlock()
+	if len(commentLikes) != 1 || commentLikes[0] != 1 {
+		t.Fatalf("comment likes = %v", commentLikes)
+	}
+	runeKey("D")
+	app.Update(waitFor[commentDeletedMsg](t, runeKey("D")))
+	ts.mu.Lock()
+	deletedComments := append([]int64(nil), ts.deletedComments...)
+	ts.mu.Unlock()
+	if len(deletedComments) != 1 || deletedComments[0] != 1 {
+		t.Fatalf("deleted comments = %v", deletedComments)
+	}
+
+	// Back to the post list and open the article editor for a new article.
+	sendKey(t, app, tea.KeyEsc)
+	runeKey("n")
+	if app.community.editorMode != editorCreate {
+		t.Fatalf("editor mode = %d, want create", app.community.editorMode)
+	}
+	app.community.editorTitle.SetValue("新文章标题")
+	app.community.editorContent.SetValue("新文章正文")
+	app.Update(waitFor[articleSavedMsg](t, ctrlS()))
+	ts.mu.Lock()
+	created := append([]testCreatedPost(nil), ts.createdPosts...)
+	ts.mu.Unlock()
+	if len(created) != 1 || created[0].Title != "新文章标题" || created[0].ContentType != 2 {
+		t.Fatalf("created posts = %+v", created)
+	}
+
+	// Open the article again and edit it.
+	sendKey(t, app, tea.KeyEnter)
+	cmd = sendKey(t, app, tea.KeyEnter)
+	app.Update(waitFor[postDetailMsg](t, cmd))
+	app.Update(runeKey("e"))
+	if app.community.editorMode != editorEdit {
+		t.Fatalf("editor mode = %d, want edit", app.community.editorMode)
+	}
+	app.community.editorTitle.SetValue("修改后的标题")
+	app.Update(waitFor[articleSavedMsg](t, ctrlS()))
+	ts.mu.Lock()
+	edited := append([]testEditedPost(nil), ts.editedPosts...)
+	ts.mu.Unlock()
+	if len(edited) != 1 || edited[0].PostID != 31622 || edited[0].Title != "修改后的标题" {
+		t.Fatalf("edited posts = %+v", edited)
+	}
+
+	// Delete the article (two-step confirmation).
+	runeKey("d") // first d arms the confirmation
+	app.Update(waitFor[articleDeletedMsg](t, runeKey("d")))
+	ts.mu.Lock()
+	deletedPosts := append([]int64(nil), ts.deletedPosts...)
+	ts.mu.Unlock()
+	if len(deletedPosts) != 1 || deletedPosts[0] != 31622 {
+		t.Fatalf("deleted posts = %v", deletedPosts)
+	}
+}

@@ -609,6 +609,97 @@ func communityActionCalls(client *Client) map[string]func() error {
 		"CreateComment": func() error {
 			return client.CreateComment(ctx, badToken, 31622, 0, "hi")
 		},
+		"DeleteComment": func() error {
+			return client.DeleteComment(ctx, badToken, 123)
+		},
+		"LikeComment": func() error {
+			return client.LikeComment(ctx, badToken, 123)
+		},
+		"CreatePost": func() error {
+			return client.CreatePost(ctx, badToken, 41, "", "title", "content", 2)
+		},
+		"EditPost": func() error {
+			return client.EditPost(ctx, badToken, 31622, "title", "content", 2)
+		},
+		"DeletePost": func() error {
+			return client.DeletePost(ctx, badToken, 31622)
+		},
+	}
+}
+
+func TestArticleCRUDAndCommentActions(t *testing.T) {
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assertCommunityRequest(t, r, r.URL.Path, communityTestToken) {
+			writeJSONResp(w, 200, `{"code":-1,"msg":"bad request"}`)
+			return
+		}
+		requested = append(requested, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/community/posts/create":
+			var req postCreateRequest
+			if decodeCommunityRequestBody(t, r, &req) {
+				if req.BaID != 41 || req.Title != "新标题" || req.Content != "新正文" || req.ContentType != 2 {
+					t.Errorf("create request = %+v", req)
+				}
+			}
+		case "/v1/community/posts/edit":
+			var req postEditRequest
+			if decodeCommunityRequestBody(t, r, &req) {
+				if req.PostID != 31622 || req.Title != "改标题" || req.ContentType != 1 {
+					t.Errorf("edit request = %+v", req)
+				}
+			}
+		case "/v1/community/posts/delete":
+			var req postDeleteRequest
+			if decodeCommunityRequestBody(t, r, &req) && req.PostID != 31622 {
+				t.Errorf("delete request = %+v", req)
+			}
+		case "/v1/community/comment/comment-like":
+			var req communityIDRequest
+			if decodeCommunityRequestBody(t, r, &req) && req.ID != 123 {
+				t.Errorf("comment-like id = %d, want 123", req.ID)
+			}
+		case "/v1/community/comment/delete":
+			var req commentDeleteRequest
+			if decodeCommunityRequestBody(t, r, &req) && req.CommentID != 123 {
+				t.Errorf("comment delete id = %d, want 123", req.CommentID)
+			}
+		}
+		writeJSONResp(w, 200, `{"code":1,"msg":"success"}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t)
+	client.BaseURL = srv.URL
+	ctx := context.Background()
+	if err := client.CreatePost(ctx, communityTestToken, 41, "", "新标题", "新正文", 2); err != nil {
+		t.Fatalf("CreatePost: %v", err)
+	}
+	if err := client.EditPost(ctx, communityTestToken, 31622, "改标题", "改正文", 1); err != nil {
+		t.Fatalf("EditPost: %v", err)
+	}
+	if err := client.DeletePost(ctx, communityTestToken, 31622); err != nil {
+		t.Fatalf("DeletePost: %v", err)
+	}
+	if err := client.LikeComment(ctx, communityTestToken, 123); err != nil {
+		t.Fatalf("LikeComment: %v", err)
+	}
+	if err := client.DeleteComment(ctx, communityTestToken, 123); err != nil {
+		t.Fatalf("DeleteComment: %v", err)
+	}
+	if len(requested) != 5 {
+		t.Fatalf("requests = %v", requested)
+	}
+	// Local validation.
+	if err := client.CreatePost(ctx, communityTestToken, 0, "", "t", "c", 2); err == nil {
+		t.Fatal("invalid baID should be rejected")
+	}
+	if err := client.CreatePost(ctx, communityTestToken, 41, "", " ", "c", 2); err == nil {
+		t.Fatal("empty title should be rejected")
+	}
+	if err := client.EditPost(ctx, communityTestToken, 31622, "t", "c", 9); err == nil {
+		t.Fatal("invalid contentType should be rejected")
 	}
 }
 

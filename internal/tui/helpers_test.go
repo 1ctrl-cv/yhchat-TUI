@@ -72,6 +72,27 @@ type testServer struct {
 	postLikes          []int64
 	postCollects       []int64
 	postedComments     []testPostedComment
+	createdPosts       []testCreatedPost
+	editedPosts        []testEditedPost
+	deletedPosts       []int64
+	commentLikes       []int64
+	deletedComments    []int64
+}
+
+// testCreatedPost records an article creation request.
+type testCreatedPost struct {
+	BaID        int64
+	Title       string
+	Content     string
+	ContentType int32
+}
+
+// testEditedPost records an article edit request.
+type testEditedPost struct {
+	PostID      int64
+	Title       string
+	Content     string
+	ContentType int32
 }
 
 // testPostedComment records one comment created through the mock API.
@@ -393,6 +414,71 @@ func newTestServer(t *testing.T) *testServer {
 				},
 			},
 		})
+	})
+
+	mux.HandleFunc("/v1/community/posts/create", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			BaID        int64  `json:"baId"`
+			Title       string `json:"title"`
+			Content     string `json:"content"`
+			ContentType int32  `json:"contentType"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.createdPosts = append(ts.createdPosts, testCreatedPost{
+			BaID: payload.BaID, Title: payload.Title, Content: payload.Content, ContentType: payload.ContentType,
+		})
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/community/posts/edit", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			PostID      int64  `json:"postId"`
+			Title       string `json:"title"`
+			Content     string `json:"content"`
+			ContentType int32  `json:"contentType"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.editedPosts = append(ts.editedPosts, testEditedPost{
+			PostID: payload.PostID, Title: payload.Title, Content: payload.Content, ContentType: payload.ContentType,
+		})
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/community/posts/delete", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			PostID int64 `json:"postId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.deletedPosts = append(ts.deletedPosts, payload.PostID)
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/community/comment/comment-like", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.commentLikes = append(ts.commentLikes, payload.ID)
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
+	})
+
+	mux.HandleFunc("/v1/community/comment/delete", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			CommentID int64 `json:"commentId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		ts.mu.Lock()
+		ts.deletedComments = append(ts.deletedComments, payload.CommentID)
+		ts.mu.Unlock()
+		writeTestJSON(w, map[string]any{"code": 1, "msg": "success"})
 	})
 
 	mux.HandleFunc("/v1/community/posts/post-like", func(w http.ResponseWriter, r *http.Request) {

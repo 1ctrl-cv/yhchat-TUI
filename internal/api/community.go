@@ -243,6 +243,94 @@ func (c *Client) Posts(ctx context.Context, token string, baID int64, page, size
 	return data.Posts, data.Total, nil
 }
 
+// CreatePost publishes a new community article.
+//
+// Endpoint: POST /v1/community/posts/create (JSON).
+func (c *Client) CreatePost(ctx context.Context, token string, baID int64, groupID, title, content string, contentType int32) error {
+	if baID <= 0 {
+		return fmt.Errorf("分区 ID 无效")
+	}
+	title = strings.TrimSpace(title)
+	content = strings.TrimSpace(content)
+	if title == "" {
+		return fmt.Errorf("文章标题不能为空")
+	}
+	if content == "" {
+		return fmt.Errorf("文章内容不能为空")
+	}
+	if contentType != 1 && contentType != 2 {
+		return fmt.Errorf("文章类型必须是 1（文本）或 2（Markdown）")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/posts/create", token, postCreateRequest{
+		BaID:        baID,
+		GroupID:     groupID,
+		Title:       title,
+		Content:     content,
+		ContentType: contentType,
+	})
+	return err
+}
+
+// EditPost updates the title/content/type of an existing article.
+//
+// Endpoint: POST /v1/community/posts/edit (JSON).
+func (c *Client) EditPost(ctx context.Context, token string, postID int64, title, content string, contentType int32) error {
+	if postID <= 0 {
+		return fmt.Errorf("文章 ID 无效")
+	}
+	title = strings.TrimSpace(title)
+	content = strings.TrimSpace(content)
+	if title == "" {
+		return fmt.Errorf("文章标题不能为空")
+	}
+	if content == "" {
+		return fmt.Errorf("文章内容不能为空")
+	}
+	if contentType != 1 && contentType != 2 {
+		return fmt.Errorf("文章类型必须是 1（文本）或 2（Markdown）")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/posts/edit", token, postEditRequest{
+		PostID:      postID,
+		Title:       title,
+		Content:     content,
+		ContentType: contentType,
+	})
+	return err
+}
+
+// DeletePost deletes one community article.
+//
+// Endpoint: POST /v1/community/posts/delete (JSON).
+func (c *Client) DeletePost(ctx context.Context, token string, postID int64) error {
+	if postID <= 0 {
+		return fmt.Errorf("文章 ID 无效")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/posts/delete", token, postDeleteRequest{PostID: postID})
+	return err
+}
+
+// LikeComment toggles the like state of one article comment.
+//
+// Endpoint: POST /v1/community/comment/comment-like (JSON body {"id": id}).
+func (c *Client) LikeComment(ctx context.Context, token string, commentID int64) error {
+	if commentID <= 0 {
+		return fmt.Errorf("评论 ID 无效")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/comment/comment-like", token, communityIDRequest{ID: commentID})
+	return err
+}
+
+// DeleteComment deletes one article comment (or nested reply).
+//
+// Endpoint: POST /v1/community/comment/delete (JSON body {"commentId": id}).
+func (c *Client) DeleteComment(ctx context.Context, token string, commentID int64) error {
+	if commentID <= 0 {
+		return fmt.Errorf("评论 ID 无效")
+	}
+	_, err := c.postJSON(ctx, "/v1/community/comment/delete", token, commentDeleteRequest{CommentID: commentID})
+	return err
+}
+
 // LikePost toggles the like state of one community article. The server
 // endpoint is a toggle: calling it again un-likes the article.
 //
@@ -365,6 +453,34 @@ type commentCreateRequest struct {
 	PostID    int64  `json:"postId"`
 	CommentID int64  `json:"commentId"`
 	Content   string `json:"content"`
+}
+
+// postCreateRequest is the body of POST /v1/community/posts/create.
+type postCreateRequest struct {
+	BaID        int64  `json:"baId"`
+	GroupID     string `json:"groupId,omitempty"`
+	Title       string `json:"title"`
+	Content     string `json:"content"`
+	ContentType int32  `json:"contentType"`
+	DraftID     int64  `json:"draftId"`
+}
+
+// postEditRequest is the body of POST /v1/community/posts/edit.
+type postEditRequest struct {
+	PostID      int64  `json:"postId"`
+	Title       string `json:"title"`
+	Content     string `json:"content"`
+	ContentType int32  `json:"contentType"`
+}
+
+// postDeleteRequest is the body of POST /v1/community/posts/delete.
+type postDeleteRequest struct {
+	PostID int64 `json:"postId"`
+}
+
+// commentDeleteRequest is the body of POST /v1/community/comment/delete.
+type commentDeleteRequest struct {
+	CommentID int64 `json:"commentId"`
 }
 
 // normalizeCommunityPage clamps paging arguments to what the community
