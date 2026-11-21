@@ -6,15 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-// TestRotatingWriterRotatesWhileRunning verifies that a single long-running
-// session rotates the log once it reaches the configured size.
-func TestRotatingWriterRotatesWhileRunning(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.log")
-	logFile, err := openLog(path, 160, 2)
+// TestSizeRotationWhileRunning verifies that the active daily file is rotated
+// once it reaches the configured size, without waiting for a restart.
+func TestSizeRotationWhileRunning(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)
+	logFile, err := newRotatingFile(dir, 160, 7, 2, func() time.Time { return now })
 	if err != nil {
-		t.Fatalf("openLog: %v", err)
+		t.Fatalf("newRotatingFile: %v", err)
 	}
 	defer func() { _ = logFile.Close() }()
 
@@ -24,66 +26,132 @@ func TestRotatingWriterRotatesWhileRunning(t *testing.T) {
 			t.Fatalf("write %d: %v", i, err)
 		}
 	}
-	if info, err := os.Stat(path); err != nil || info.Size() > 160 {
+	active := activeLogPath(dir, "2026-11-21")
+	if info, err := os.Stat(active); err != nil || info.Size() > 160 {
 		t.Fatalf("active log size = %v (err %v), want <= 160", info, err)
 	}
-	for _, suffix := range []string{".1", ".2"} {
-		if _, err := os.Stat(path + suffix); err != nil {
-			t.Fatalf("rotated file %s missing: %v", suffix, err)
+	for _, index := range []int{1, 2} {
+		if _, err := os.Stat(backupLogPath(dir, "2026-11-21", index)); err != nil {
+			t.Fatalf("backup .%d missing: %v", index, err)
 		}
 	}
-	if _, err := os.Stat(path + ".3"); err == nil {
-		t.Fatal("found .3 backup although keep=2")
+	if _, err := os.Stat(backupLogPath(dir, "2026-11-21", 3)); err == nil {
+		t.Fatal("found .3 backup although keepBackups=2")
 	}
 }
 
-// TestRotatingWriterRotatesOversizedStartupFile checks that a huge log left
-// over from a previous run is rotated when logging starts.
-func TestRotatingWriterRotatesOversizedStartupFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.log")
-	if err := os.WriteFile(path, []byte(strings.Repeat("old\n", 100)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	logFile, err := openLog(path, 128, 3)
+// TestDailyRotation verifies that writes after midnight go into a new dated file.
+func TestDailyRotation(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 21, 23, 59, 0, 0, time.Local)
+	logFile, err := newRotatingFile(dir, 1<<20, 7, 3, func() time.Time { return now })
 	if err != nil {
-		t.Fatalf("openLog: %v", err)
+		t.Fatalf("newRotatingFile: %v", err)
 	}
 	defer func() { _ = logFile.Close() }()
-	if info, err := os.Stat(path); err != nil || info.Size() != 0 {
-		t.Fatalf("new log size = %v (err %v), want 0", info, err)
-	}
-	if _, err := os.Stat(path + ".1"); err != nil {
-		t.Fatalf("legacy log was not rotated: %v", err)
-	}
-}
 
-// TestConfigFromEnvOverrides verifies the environment overrides used by Init.
-func TestConfigFromEnvOverrides(t *testing.T) {
-	t.Setenv("YHCHAT_LOG_MAX_MB", "12")
-	t.Setenv("YHCHAT_LOG_KEEP", "7")
-	maxBytes, keep := configFromEnv()
-	if maxBytes != 12<<20 || keep != 7 {
-		t.Fatalf("config = (%d, %d), want (%d, 7)", maxBytes, keep, 12<<20)
-	}
-	t.Setenv("YHCHAT_LOG_MAX_MB", "0")
-	t.Setenv("YHCHAT_LOG_KEEP", "999")
-	maxBytes, keep = configFromEnv()
-	if maxBytes != defaultMax || keep != defaultKeep {
-		t.Fatalf("invalid env should be ignored, got (%d, %d)", maxBytes, keep)
-	}
-}
-
-// TestRotateFilesNoExistingBackups covers the first rotation.
-func TestRotateFilesNoExistingBackups(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.log")
-	if err := os.WriteFile(path, []byte("content"), 0o600); err != nil {
+	if _, err := fmt.Fprintln(logFile, "day-one"); err != nil {
 		t.Fatal(err)
 	}
-	rotateFiles(path, 3)
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("active log should be moved, stat err = %v", err)
+	now = now.Add(2 * time.Minute) // crosses midnight into 2026-11-22
+	if _, err := fmt.Fprintln(logFile, "day-two"); err != nil {
+		t.Fatal(err)
 	}
-	if got, err := os.ReadFile(path + ".1"); err != nil || string(got) != "content" {
-		t.Fatalf("backup = %q (err %v)", got, err)
+	first := filepath.Join(dir, "yhchat-tui-2026-11-21.log")
+	second := filepath.Join(dir, "yhchat-tui-2026-11-22.log")
+	if data, err := os.ReadFile(first); err != nil || !strings.Contains(string(data), "day-one") {
+		t.Fatalf("first day log = %q (err %v)", data, err)
+	}
+	if data, err := os.ReadFile(second); err != nil || !strings.Contains(string(data), "day-two") {
+		t.Fatalf("second day log = %q (err %v)", data, err)
+	}
+}
+
+// TestRetentionCleanup verifies old daily files are removed but recent ones stay.
+func TestRetentionCleanup(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)
+	oldDate := now.AddDate(0, 0, -10).Format(dayFormat)
+	recentDate := now.AddDate(0, 0, -2).Format(dayFormat)
+	oldPath := activeLogPath(dir, oldDate)
+	recentPath := activeLogPath(dir, recentDate)
+	for _, path := range []string{oldPath, recentPath} {
+		if err := os.WriteFile(path, []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logFile, err := newRotatingFile(dir, 1<<20, 7, 3, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+	defer func() { _ = logFile.Close() }()
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("old log should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(recentPath); err != nil {
+		t.Fatalf("recent log should be kept: %v", err)
+	}
+}
+
+// TestSizeBackupLimit verifies cleanup removes surplus numbered backups.
+func TestSizeBackupLimit(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)
+	date := now.Format(dayFormat)
+	for _, index := range []int{6, 7} {
+		if err := os.WriteFile(backupLogPath(dir, date, index), []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logFile, err := newRotatingFile(dir, 1<<20, 7, 3, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+	defer func() { _ = logFile.Close() }()
+	for _, index := range []int{6, 7} {
+		if _, err := os.Stat(backupLogPath(dir, date, index)); !os.IsNotExist(err) {
+			t.Fatalf("surplus backup .%d should be removed", index)
+		}
+	}
+}
+
+// TestLegacyMigration verifies the old single-file scheme is renamed.
+func TestLegacyMigration(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)
+	legacy := filepath.Join(dir, "yhchat-tui.log")
+	if err := os.WriteFile(legacy, []byte("legacy-line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mtime := now.AddDate(0, 0, -1)
+	if err := os.Chtimes(legacy, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := newRotatingFile(dir, 1<<20, 7, 3, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("newRotatingFile: %v", err)
+	}
+	defer func() { _ = logFile.Close() }()
+	migrated := activeLogPath(dir, mtime.Format(dayFormat))
+	if data, err := os.ReadFile(migrated); err != nil || !strings.Contains(string(data), "legacy-line") {
+		t.Fatalf("migrated log = %q (err %v)", data, err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy log should be renamed, stat err = %v", err)
+	}
+}
+
+// TestParseLogName covers the dated naming scheme parser.
+func TestParseLogName(t *testing.T) {
+	date, backup, ok := parseLogName("yhchat-tui-2026-11-21.log")
+	if !ok || date != "2026-11-21" || backup != 0 {
+		t.Fatalf("active name parsed as (%q, %d, %v)", date, backup, ok)
+	}
+	date, backup, ok = parseLogName("yhchat-tui-2026-11-21.4.log")
+	if !ok || date != "2026-11-21" || backup != 4 {
+		t.Fatalf("backup name parsed as (%q, %d, %v)", date, backup, ok)
+	}
+	if _, _, ok := parseLogName("other.log"); ok {
+		t.Fatal("unrelated file name should not parse")
 	}
 }
