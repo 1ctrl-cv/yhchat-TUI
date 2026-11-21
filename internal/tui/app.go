@@ -152,6 +152,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openContactChatMsg:
 		return a, a.openContactChat(msg)
 
+	case openArticleMsg:
+		return a, a.openArticle(msg.postID)
+
 	case switchSectionMsg:
 		return a, a.switchSection(msg.to)
 
@@ -481,6 +484,32 @@ func (a *App) handleLogoutDone(msg logoutDoneMsg) tea.Cmd {
 		return tea.Batch(a.spinner.Tick, autoLoginCmd(a.client, a.store.Data.Token))
 	}
 	return a.resetLogin(notice)
+}
+
+// openArticle switches to the community page and loads one article by ID.
+func (a *App) openArticle(postID int64) tea.Cmd {
+	if postID <= 0 {
+		return nil
+	}
+	a.screen = screenCommunity
+	a.community = a.community.resize(a.width, a.height)
+	var cmds []tea.Cmd
+	if len(a.community.communities) == 0 {
+		var initCmd tea.Cmd
+		a.community, initCmd = a.community.init()
+		if initCmd != nil {
+			cmds = append(cmds, initCmd)
+		}
+	}
+	var loadCmd tea.Cmd
+	a.community, loadCmd = a.community.openArticle(postID)
+	if loadCmd != nil {
+		cmds = append(cmds, loadCmd)
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleSwitchAccount switches the active login and re-authenticates.

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -573,6 +574,14 @@ func (m mainWindowModel) handleMessagesKey(key string) (mainWindowModel, tea.Cmd
 	case "enter":
 		m.setFocus(focusInput)
 		return m, m.applyFocus()
+	case "v":
+		if message := m.selectedMessage(); message != nil {
+			if postID := articlePostID(*message); postID > 0 {
+				return m, func() tea.Msg { return openArticleMsg{postID: postID} }
+			}
+		}
+		m.errText = "请选择一条文章消息"
+		return m, nil
 	case "q":
 		return m.quoteSelectedMessage()
 	case "f":
@@ -1479,6 +1488,11 @@ func (m mainWindowModel) handleMouse(msg tea.MouseMsg) (mainWindowModel, tea.Cmd
 		if len(m.cacheStarts) > 0 {
 			m.selectedMsg = index
 			m.ensureSelectedVisible()
+			if message := m.selectedMessage(); message != nil {
+				if postID := articlePostID(*message); postID > 0 {
+					return m, func() tea.Msg { return openArticleMsg{postID: postID} }
+				}
+			}
 		}
 		return m, m.applyFocus()
 	}
@@ -1984,6 +1998,18 @@ func (m mainWindowModel) messageBodyLines(msg api.Message, width int) []string {
 	return lines
 }
 
+// articlePostID extracts the article ID from a content_type=6 message.
+func articlePostID(message api.Message) int64 {
+	if message.ContentType != 6 {
+		return 0
+	}
+	postID, err := strconv.ParseInt(strings.TrimSpace(message.Content.PostID), 10, 64)
+	if err != nil || postID <= 0 {
+		return 0
+	}
+	return postID
+}
+
 // articleCardMessageLines renders an article message as a bordered card with
 // the title and the first few non-empty content lines.
 func articleCardMessageLines(title, content string, maxWidth int) []string {
@@ -1998,6 +2024,7 @@ func articleCardMessageLines(title, content string, maxWidth int) []string {
 		preview = []string{articleCardMetaStyle.Render("点击查看文章")}
 	}
 	body = append(body, preview...)
+	body = append(body, articleCardMetaStyle.Render("▸ 点击或按 v 查看文章"))
 	card := articleCardStyle.Render(strings.Join(body, "\n"))
 	return strings.Split(card, "\n")
 }

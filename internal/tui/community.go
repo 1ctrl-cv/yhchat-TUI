@@ -448,6 +448,10 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 			return m.handleLoadError(msg.err, "加载文章失败")
 		}
 		m.postDetail = msg.detail
+		if msg.detail != nil && msg.detail.Ba.ID != 0 {
+			ba := msg.detail.Ba
+			m.selectedBa = &ba
+		}
 		m.postComments = msg.comments
 		m.commentsTotal = msg.commentsTotal
 		if m.commentsTotal < len(m.postComments) {
@@ -656,6 +660,19 @@ func (m communityModel) Update(msg tea.Msg) (communityModel, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// openArticle loads a single article by ID (used by chat article-card links).
+func (m communityModel) openArticle(postID int64) (communityModel, tea.Cmd) {
+	if postID <= 0 {
+		m.errText = "文章 ID 无效"
+		return m, nil
+	}
+	m.loading = true
+	m.errText = ""
+	m.okText = ""
+	m.view = communityListView
+	return m, tea.Batch(m.spinner.Tick, loadPostDetailCmd(m.client, m.token, postID))
 }
 
 // currentPost returns the article shown in the article view.

@@ -107,6 +107,9 @@ type notificationsDismissedMsg struct {
 	err    error
 }
 
+// openArticleMsg asks the App to open one community article detail page.
+type openArticleMsg struct{ postID int64 }
+
 // switchAccountMsg asks the App to switch the active login account.
 type switchAccountMsg struct{ token string }
 
