@@ -1929,14 +1929,14 @@ func (m mainWindowModel) messageBodyLines(msg api.Message, width int) []string {
 	case 5:
 		lines = append(lines, "[表单]")
 	case 6: // article card
-		title := strings.TrimSpace(msg.Content.PostTitle)
-		if title == "" {
-			title = "文章"
+		cardWidth := width - 2
+		if cardWidth > 56 {
+			cardWidth = 56
 		}
-		lines = append(lines, "[文章] "+truncate(title, maxInt(8, width/2)))
-		if content := strings.TrimSpace(msg.Content.PostContent); content != "" {
-			lines = append(lines, wrapText(content, width)...)
+		if cardWidth < 12 {
+			cardWidth = maxInt(8, width)
 		}
+		lines = append(lines, articleCardMessageLines(msg.Content.PostTitle, msg.Content.PostContent, cardWidth)...)
 	case 7:
 		lines = append(lines, "[表情]")
 	case 8: // html
@@ -1982,6 +1982,51 @@ func (m mainWindowModel) messageBodyLines(msg api.Message, width int) []string {
 		lines = append(lines, msg.Preview())
 	}
 	return lines
+}
+
+// articleCardMessageLines renders an article message as a bordered card with
+// the title and the first few non-empty content lines.
+func articleCardMessageLines(title, content string, maxWidth int) []string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "文章"
+	}
+	innerWidth := maxInt(10, maxWidth-4)
+	body := []string{articleCardTitleStyle.Render("◆ " + truncate(title, innerWidth-2))}
+	preview := articlePreviewLines(content, 3, innerWidth)
+	if len(preview) == 0 {
+		preview = []string{articleCardMetaStyle.Render("点击查看文章")}
+	}
+	body = append(body, preview...)
+	card := articleCardStyle.Render(strings.Join(body, "\n"))
+	return strings.Split(card, "\n")
+}
+
+// articlePreviewLines extracts up to maxLines plain preview lines from the
+// article markdown, without rendering inline styles.
+func articlePreviewLines(content string, maxLines, width int) []string {
+	var out []string
+	for _, raw := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(strings.TrimRight(raw, "\r"))
+		if line == "" || strings.HasPrefix(line, "```") {
+			continue
+		}
+		line = strings.TrimLeft(line, "#>-*+ \t")
+		line = strings.ReplaceAll(line, "**", "")
+		line = strings.ReplaceAll(line, "__", "")
+		line = strings.ReplaceAll(line, "`", "")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		for _, wrapped := range wrapText(line, width) {
+			out = append(out, wrapped)
+			if len(out) >= maxLines {
+				return out
+			}
+		}
+	}
+	return out
 }
 
 // stripHTMLTags removes HTML tags from a message body.

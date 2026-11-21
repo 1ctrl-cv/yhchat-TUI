@@ -65,6 +65,14 @@ var (
 	tabInactiveCompactStyle = lipgloss.NewStyle().
 				Foreground(colorMuted)
 
+	// Article-card message box used in the chat history.
+	articleCardStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(colorCyan).
+				Padding(0, 1)
+	articleCardTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(colorCyan)
+	articleCardMetaStyle  = lipgloss.NewStyle().Foreground(colorMuted)
+
 	buttonStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder).
